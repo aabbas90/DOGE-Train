@@ -1,7 +1,9 @@
 import os, argparse
 import numpy as np
 import torch
-torch.multiprocessing.set_start_method('spawn') # To use CUDA in pickling solver.
+import warnings
+warnings.filterwarnings("ignore", ".*does not have many workers.*")
+warnings.filterwarnings("ignore", ".*if you want to see logs for the training epoch.*")
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint

@@ -1,7 +1,7 @@
 import torch
 import pickle
 import BDD.bdd_cuda_learned_mma_py as bdd_solver
-from torch_scatter import scatter_sum
+from torch_scatter import scatter_sum, scatter_mean
 import bdd_cuda_torch
 import time 
 
@@ -53,9 +53,11 @@ def distribute_delta(solvers, solver_state):
     lo_costs, hi_costs = bdd_cuda_torch.DistributeDeferredDelta.apply(solvers, solver_state['lo_costs'], solver_state['hi_costs'], solver_state['def_mm'])
     return {'lo_costs': lo_costs, 'hi_costs': hi_costs, 'def_mm': torch.zeros_like(solver_state['def_mm'])}
 
-def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, improvement_slope = 1e-6, track_grad_after_itr = 0):
+def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, improvement_slope = 1e-6, grad_dual_itr_max_itr = None):
+    if grad_dual_itr_max_itr is None:
+        grad_dual_itr_max_itr = num_iterations
     lo_costs, hi_costs, def_mm = bdd_cuda_torch.DualIterations.apply(solvers, solver_state['lo_costs'], solver_state['hi_costs'], solver_state['def_mm'], 
-                                                                    dist_weights, num_iterations, omega, track_grad_after_itr, improvement_slope)
+                                                                    dist_weights, num_iterations, omega, grad_dual_itr_max_itr, improvement_slope)
     solver_state['lo_costs'] = lo_costs
     solver_state['hi_costs'] = hi_costs
     solver_state['def_mm'] = def_mm
@@ -78,3 +80,34 @@ def perturb_primal_costs(solvers, solver_state, primal_perturbation):
     solver_state['lo_costs'] = lo_costs
     solver_state['hi_costs'] = hi_costs
     return solver_state
+
+def check_decode_primal_solution(batch, mm_pred, orig_obj_vector, gt_ilp_sol_var):
+    var_indices = batch.edge_index_var_con[0]
+    mm_pred_sign = torch.sign(mm_pred)
+    variable_mean_sign = scatter_mean(mm_pred_sign, var_indices)
+    assignment_lo = variable_mean_sign >= 0.9
+    assignment_hi = variable_mean_sign <= -0.9
+    vars_agree = torch.logical_or(assignment_hi, assignment_lo)
+    solutions = []
+    solution_objectives = []
+    gt_sol_objectives = []
+    prev_var_start = 0
+    fraction_disagreements = []
+    for (b, solver) in enumerate(batch.solvers):
+        var_end = batch.num_vars[b] + prev_var_start - 1
+        is_decodable = torch.all(vars_agree[prev_var_start:var_end])
+        if is_decodable:
+            current_sol = torch.zeros((batch.num_vars[b]), device=mm_pred.device)
+            current_sol[assignment_hi[prev_var_start:var_end + 1]] = 1.0
+            current_sol[-1] = 0 # Terminal node.
+            solutions.append(current_sol)
+
+            current_sol_cost = torch.sum(orig_obj_vector[prev_var_start:var_end + 1] * current_sol)
+            solution_objectives.append(current_sol_cost)
+            gt_sol_cost = torch.sum(orig_obj_vector[prev_var_start:var_end + 1] * gt_ilp_sol_var[prev_var_start:var_end + 1])
+            gt_sol_objectives.append(gt_sol_cost)
+            fraction_disagreements.append(torch.tensor([0.0]))
+        else:
+            fraction_disagreements.append(torch.logical_not(vars_agree[prev_var_start:var_end]).sum().item() / batch.num_vars[b])
+        prev_var_start = var_end + 1 # To account for terminal node.
+    return solutions, solution_objectives, gt_sol_objectives, fraction_disagreements

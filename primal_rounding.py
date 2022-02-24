@@ -4,9 +4,9 @@ from pytorch_lightning.core.lightning import LightningModule
 from typing import List, Set, Dict, Tuple, Optional
 from torch.optim import Adam
 import time, tqdm, random, logging, os
-
+from random import randrange
 from model.model import FeatureExtractor, PrimalPerturbationBlock
-from model.solver_utils import init_solver_and_get_states, get_valid_edge_mask
+import model.solver_utils as sol_utils
 
 class PrimalRoundingBDD(LightningModule):
     def __init__(self, 
@@ -16,9 +16,10 @@ class PrimalRoundingBDD(LightningModule):
                 num_dual_iter_test: int,
                 dual_improvement_slope_train: float,
                 dual_improvement_slope_test: float,
-                track_grad_after_iter: int,
+                grad_dual_itr_max_itr: int,
                 lr: float,
                 loss_discount_factor:float,
+                loss_margin: float,
                 omega: float,
                 var_lp_features: List[str],  # orig_obj, deg, obj pert
                 con_lp_features: List[str],  # BDD lb, rhs, con type, degree
@@ -31,7 +32,8 @@ class PrimalRoundingBDD(LightningModule):
                 optimizer_name: str,
                 datasets: List[str],
                 test_fraction: List[int],
-                test_datanames: Optional[List[str]] = None
+                log_every_n_steps: int = 20,
+                test_datanames: Optional[List[str]] = None,
                 ):
         super(PrimalRoundingBDD, self).__init__()
         self.save_hyperparameters(
@@ -41,10 +43,11 @@ class PrimalRoundingBDD(LightningModule):
                 'num_dual_iter_test', 
                 'dual_improvement_slope_train',
                 'dual_improvement_slope_test',
-                'track_grad_after_iter', 
+                'grad_dual_itr_max_itr', 
                 'lr',
                 'omega',
                 'loss_discount_factor',
+                'loss_margin',
                 'var_lp_features',
                 'con_lp_features',
                 'edge_lp_features',
@@ -75,7 +78,7 @@ class PrimalRoundingBDD(LightningModule):
 
         self.test_datanames = test_datanames
         self.console_logger = logging.getLogger('lightning')
-        self.logger_interval = 20
+        self.log_every_n_steps = log_every_n_steps
 
     @classmethod
     def from_config(cls, cfg, test_datanames):
@@ -89,9 +92,10 @@ class PrimalRoundingBDD(LightningModule):
             num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
             dual_improvement_slope_train = cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE,
             dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
-            track_grad_after_iter = cfg.TRAIN.TRACK_GRAD_AFTER_ITR,
+            grad_dual_itr_max_itr = cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR,
             lr = cfg.TRAIN.BASE_LR,
             loss_discount_factor = cfg.TRAIN.LOSS_DISCOUNT_FACTOR,
+            loss_margin = cfg.TRAIN.LOSS_MARGIN,
             omega = cfg.MODEL.OMEGA,
             num_learned_var_f = cfg.MODEL.VAR_FEATURE_DIM, 
             num_learned_con_f = cfg.MODEL.CON_FEATURE_DIM,
@@ -101,6 +105,7 @@ class PrimalRoundingBDD(LightningModule):
             optimizer_name = cfg.TRAIN.OPTIMIZER,
             datasets = cfg.DATA.DATASETS,
             test_fraction = cfg.DATA.TEST_FRACTION,
+            log_every_n_steps = cfg.LOG_EVERY,
             test_datanames = test_datanames)
 
     @property
@@ -129,7 +134,8 @@ class PrimalRoundingBDD(LightningModule):
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
         batch.edge_index_var_con = batch.edge_index_var_con.to(device)
         batch.omega = torch.tensor([self.hparams.omega], device = device)
-        solvers, solver_state, per_bdd_sol, per_bdd_lb, dist_weights = init_solver_and_get_states(batch, device, 0, 1.0, batch.omega)
+        solvers, solver_state, per_bdd_sol, per_bdd_lb, dist_weights = sol_utils.init_solver_and_get_states(batch, device, 0, 1.0, batch.omega)
+        all_mm_diff = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
 
         batch.dist_weights = dist_weights # Isotropic weights.
 
@@ -145,7 +151,7 @@ class PrimalRoundingBDD(LightningModule):
         batch.con_type = None
 
         # Edge LP features:
-        batch.edge_rest_lp_f = torch.stack((per_bdd_sol, batch.con_coeff.to(device)), 1)
+        batch.edge_rest_lp_f = torch.stack((per_bdd_sol, batch.con_coeff.to(device), all_mm_diff, all_mm_diff), 1)
         batch.solver_state = solver_state
         
         batch.solvers = solvers
@@ -177,88 +183,125 @@ class PrimalRoundingBDD(LightningModule):
     #     proposed_start_step = np.round(np.random.normal(mean_start_step, 3)).astype(np.int32).item(0)
     #     return max(min(proposed_start_step, self.hparams.start_train_step_range[1]), self.hparams.start_train_step_range[0])
 
-    def log_metrics(self, loss, losses, metrics, mode):
+    def log_metrics(self, loss, metrics, mode, batch_size):
         self.console_logger.info(f'itr: {self.global_step}', end = '')
-        for k, v in {**losses, **metrics}.items():
-            self.log(mode + '_' + k, v)
-            self.console_logger.info(f'{mode}_ + {k}: {v}', end = '')
-        self.log(mode + '_loss', loss.item())
+        metric_to_log = {}
+        for m in metrics[next(iter(metrics.keys()))]:
+            metric_to_log[m] = {}
+
+        try:
+            for r in metrics.keys():
+                for m in metrics[r].keys():
+                    metric_to_log[m][r] = metrics[r][m]
+        except:
+            breakpoint()
+        for m in metric_to_log.keys():
+            self.logger.experiment.add_scalars(f'{mode}_{m}', metric_to_log[m], global_step = self.global_step)
+            if m == 'frac_disagree':
+                for rk, v in metric_to_log[m].items():
+                    self.console_logger.info(f'{mode}_{m}_{rk}: {v:.6f}', end = '')
+
+        self.log(mode + '_loss', loss.item(), batch_size=batch_size)
+        
+        return metric_to_log
 
     # Find edges which correspond to valid primal variables (as each BDD contains 1 invalid primal variable each.)
     def get_valid_target_solution_edge(self, batch):
-        valid_edge_mask = get_valid_edge_mask(batch)
+        valid_edge_mask = sol_utils.get_valid_edge_mask(batch)
         var_indices = batch.edge_index_var_con[0]
         valid_var_indices = var_indices[valid_edge_mask]
         gt_ilp_sol_var = torch.cat([torch.from_numpy(s).to(var_indices.device) for s in batch.gt_info['ilp_stats']['sol']], 0)
         gt_ilp_sol_edge = gt_ilp_sol_var[valid_var_indices]
-        return gt_ilp_sol_edge, valid_edge_mask
+        return gt_ilp_sol_edge, valid_edge_mask, gt_ilp_sol_var
 
-    def primal_loss(self, batch, mm_pred, gt_ilp_sol_edge, valid_edge_mask, eps = 1e-3):
+    def primal_loss(self, batch, mm_pred, gt_ilp_sol_edge, valid_edge_mask):
          # Gather the solution w.r.t all valid edges
         mm_pred_valid = mm_pred[valid_edge_mask]
 
         # if gt_ilp_solution > 0 then mm_pred should be < -eps and if gt_ilp_solution == 0 then mm_pred should be > eps:
-        return torch.sum(torch.nn.ReLU()((gt_ilp_sol_edge * mm_pred_valid) + eps) + torch.nn.ReLU()(((gt_ilp_sol_edge - 1.0) * mm_pred_valid) + eps))
+        return torch.sum(
+                torch.relu(gt_ilp_sol_edge * (mm_pred_valid + self.hparams.loss_margin)) + 
+                torch.relu((gt_ilp_sol_edge - 1.0) * (mm_pred_valid - self.hparams.loss_margin)))
 
-    def primal_accuracy(self, batch, mm_pred, gt_ilp_sol_edge, valid_edge_mask, eps = 1e-3):
+    def primal_metrics(self, batch, mm_pred, gt_ilp_sol_edge, valid_edge_mask, orig_obj_vector, gt_ilp_sol_var):
         mm_pred_valid = mm_pred[valid_edge_mask]
-        pred_f = (mm_pred_valid > eps).float()
-        pred_t = (mm_pred_valid < -eps).float()
+        # Check if primal solution can be decoded:
+        solutions, pred_sol_obj, gt_sol_obj, fraction_disagreements = sol_utils.check_decode_primal_solution(batch, mm_pred, orig_obj_vector, gt_ilp_sol_var)
+        pred_f = (mm_pred_valid > self.hparams.loss_margin).float()
+        pred_t = (mm_pred_valid < -self.hparams.loss_margin).float()
         tp = (gt_ilp_sol_edge * pred_t).sum()
         TPR = tp / gt_ilp_sol_edge.sum() 
         tn = ((1.0 - gt_ilp_sol_edge) * pred_f).sum()
         TNR = tn / (1.0 - gt_ilp_sol_edge).sum()
-        return TPR.item(), TNR.item()
+        mean_frac_disagree = torch.stack(fraction_disagreements).mean()
+        out = {f'TPR': TPR.item(), f'TNR': TNR.item(), f'frac_disagree': mean_frac_disagree.item()}
+        if len(pred_sol_obj) > 0: # If there was any decodable primal solution:
+            mean_pred_obj = torch.stack(pred_sol_obj).mean()
+            mean_gt_obj = torch.stack(gt_sol_obj).mean()
+            out.update({'mean_pred_obj': mean_pred_obj, 'mean_gt_obj': mean_gt_obj})
+        return out
 
-    def primal_rounds(self, batch, num_rounds, num_dual_iterations, improvement_slope, track_grads_from_step):
-        assert(track_grads_from_step == 0) # Not fully ready yet.
-        var_learned_f, con_learned_f, edge_learned_f = self.lp_feature_extractor(batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.edge_rest_lp_f, batch.edge_index_var_con)
+    def single_primal_round(self, batch, gt_ilp_sol_edge, valid_edge_mask, gt_ilp_sol_var, 
+                            num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, compute_metrics):
+
+        batch.solver_state, batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f = self.primal_block(
+                                                                batch.solvers, batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.edge_rest_lp_f, 
+                                                                batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f, 
+                                                                batch.dist_weights, batch.omega, batch.edge_index_var_con,
+                                                                num_dual_iterations, grad_dual_itr_max_itr, improvement_slope)
+        batch.solver_state['def_mm'][~valid_edge_mask] = 0
+        assert(torch.all(torch.isfinite(batch.solver_state['def_mm'])))
+        # Apply loss on predicted mm differences with decay weight.
+        all_mm_diff = batch.edge_rest_lp_f[:, 2]
+        current_loss = self.primal_loss(batch, all_mm_diff, gt_ilp_sol_edge, valid_edge_mask)
+        cur_metrics = {'primal_loss': current_loss}
+        if compute_metrics:
+            cur_metrics.update(self.primal_metrics(batch, all_mm_diff, gt_ilp_sol_edge, valid_edge_mask, batch.var_lp_f[:, 0], gt_ilp_sol_var))
+        return batch, cur_metrics, current_loss
+
+    def primal_rounds(self, batch, num_rounds, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, compute_metrics, track_grads = False):
+        batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f = self.lp_feature_extractor(batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.edge_rest_lp_f, batch.edge_index_var_con)
         loss = 0
-        losses_log = {}
         metrics_log = {}
-        gt_ilp_sol_edge, valid_edge_mask = self.get_valid_target_solution_edge(batch)
+        cur_metrics = {}
+        gt_ilp_sol_edge, valid_edge_mask, gt_ilp_sol_var = self.get_valid_target_solution_edge(batch)
         for r in range(num_rounds):
-            solver_state, new_mm, new_var_lp_f = self.primal_block(batch.solvers, batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.edge_rest_lp_f, 
-                                                                    var_learned_f, con_learned_f, edge_learned_f, 
-                                                                    batch.dist_weights, batch.omega, batch.edge_index_var_con,
-                                                                    num_dual_iterations, track_grads_from_step, improvement_slope)
-            solver_state['def_mm'][~valid_edge_mask] = 0
-            try:
-                assert(torch.all(torch.isfinite(solver_state['def_mm'])))
-            except:
-                breakpoint()
-
-            batch.solver_state = solver_state
-            batch.var_lp_f = new_var_lp_f
-            # Apply loss on new_mm with decay weight.
-            current_loss = self.primal_loss(batch, new_mm, gt_ilp_sol_edge, valid_edge_mask)
-            loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r - 1) * current_loss
-            losses_log[f'loss_round_{r}'] = current_loss
-            tpr, tnr = self.primal_accuracy(batch, new_mm, gt_ilp_sol_edge, valid_edge_mask)
-            metrics_log[f'tpr_{r}'] = tpr
-            metrics_log[f'tnr_{r}'] = tnr
-        return loss, new_mm, losses_log, metrics_log
+            with torch.set_grad_enabled(r == num_rounds - 1 and track_grads):
+                batch, cur_metrics, current_loss = self.single_primal_round(batch, gt_ilp_sol_edge, valid_edge_mask, gt_ilp_sol_var,
+                                                            num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, compute_metrics)
+                loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r - 1) * current_loss
+            metrics_log[f'round_{r}'] = cur_metrics
+        return loss, batch.edge_rest_lp_f[:, 2], metrics_log
 
     def training_step(self, batch, batch_idx):
         if batch.gt_info is None:
             raise ValueError(f'GT should be known for training on: {batch.file_path}')
         
-        loss, _, losses, metrics = self.primal_rounds(batch, self.hparams.num_train_rounds, self.hparams.num_dual_iter_train, self.hparams.dual_improvement_slope_train, 0)
-        self.log_metrics(loss, losses, metrics, 'train')
+        compute_metrics = self.global_step % self.log_every_n_steps == 0
+        num_rounds = 1
+        if self.global_step > 50:
+            num_rounds = randrange(self.hparams.num_train_rounds)
+        loss, _, metrics = self.primal_rounds(
+                batch, num_rounds, self.hparams.num_dual_iter_train, 
+                self.hparams.dual_improvement_slope_train, self.hparams.grad_dual_itr_max_itr, compute_metrics, 
+                track_grads=True)
+        self.log_metrics(loss, metrics, 'train', batch_size = len(batch.solvers))
         return loss 
 
     def validation_step(self, batch, batch_idx, dataset_idx = 0):
         if batch.gt_info is None:
             raise ValueError(f'GT should be known on: {batch.file_path}')
         
-        loss, _, losses, metrics = self.primal_rounds(batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0)
-        self.log_metrics(loss, losses, metrics, 'val')
+        loss, _, metrics = self.primal_rounds(batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, True)
+        self.log_metrics(loss, metrics, 'val', batch_size = len(batch.solvers))
         return loss
 
     def test_step(self, batch, batch_idx, dataset_idx = 0):
         if batch.gt_info is None:
             raise ValueError(f'GT should be known on: {batch.file_path}')
         
-        loss, _, losses, metrics = self.primal_rounds(batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0)
-        self.log_metrics(loss, losses, metrics, 'test')
-        return loss
+        loss, _, metrics = self.primal_rounds(batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, True)
+        metric_to_log = self.log_metrics(loss, metrics, 'test', batch_size = len(batch.solvers))
+        self.log('test_loss', loss, batch_size = len(batch.solvers))
+        for m, v in metric_to_log.items():
+            self.log(m, v, batch_size = len(batch.solvers))
