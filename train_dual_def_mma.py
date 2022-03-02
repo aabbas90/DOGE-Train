@@ -9,9 +9,9 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 import torch
 torch.use_deterministic_algorithms(False)
-from config_primal.defaults import get_cfg_defaults
+from config_dual.defaults import get_cfg_defaults
 from data.dataloader import get_ilp_gnn_loaders
-from primal_rounding import PrimalRoundingBDD
+from dual_ascent import DualAscentBDD
 
 def get_final_config(args):
     cfg = get_cfg_defaults()
@@ -38,6 +38,13 @@ def get_freer_gpu():
         return -1
     return np.argmax(memory_available)
 
+def get_latest_checkpoint(output_dir):
+    rel_path = 'default/version_0/checkpoints/last.ckpt'
+    p = os.path.join(output_dir, rel_path)
+    assert os.path.exists(p), f"Automatic checkpoint detector could not find at default path: {p}."
+    print(f"Found checkpoint: {p} for evaluation.")
+    return p
+
 def main(args):
     cfg, output_dir = get_final_config(args)   
     seed_everything(cfg.SEED)
@@ -50,10 +57,7 @@ def main(args):
         #     gpus = [gpu_id]
 
     tb_logger = TensorBoardLogger(output_dir, default_hp_metric=False)
-    ckpt_path = None
-    if cfg.MODEL.CKPT_PATH is not None:
-        ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.MODEL.CKPT_PATH)
-    assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
+    assert cfg.MODEL.CKPT_PATH is None or os.path.isfile(cfg.MODEL.CKPT_PATH), "CKPT not found."
     checkpoint_callback = ModelCheckpoint(save_last=True)
     trainer = Trainer(deterministic=False,  # due to https://github.com/pyg-team/pytorch_geometric/issues/3175#issuecomment-1047886622
                     gpus = gpus,
@@ -61,35 +65,39 @@ def main(args):
                     default_root_dir=output_dir,
                     check_val_every_n_epoch = cfg.TEST.PERIOD,
                     logger = tb_logger, 
-                    resume_from_checkpoint = ckpt_path, 
+                    resume_from_checkpoint = cfg.MODEL.CKPT_PATH, 
                     num_sanity_val_steps=0, 
                     log_every_n_steps=cfg.LOG_EVERY,
                     callbacks=[checkpoint_callback])
 
     combined_train_loader, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
+    ckpt_path = cfg.MODEL.CKPT_PATH
+    if args.eval_only and ckpt_path is None:
+        ckpt_path = get_latest_checkpoint(os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR))
+
     if ckpt_path is not None:
         print(f'Loading checkpoint and hyperparameters from: {ckpt_path}')
-        model = PrimalRoundingBDD.load_from_checkpoint(ckpt_path, 
-                test_datanames = test_datanames, 
-                test_uses_full_instances = args.full_instances,
-                num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
-                num_test_rounds = cfg.TEST.NUM_ROUNDS,
-                dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE)
+        model = DualAscentBDD.load_from_checkpoint(ckpt_path,
+            test_uses_full_instances = args.full_instances,
+            num_test_rounds = cfg.TEST.NUM_ROUNDS,
+            num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
+            dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
+            test_datanames = test_datanames)
     else:
         print(f'Initializing from scratch.')
-        model = PrimalRoundingBDD.from_config(cfg, 
-                test_datanames, 
-                test_uses_full_instances = args.full_instances,
-                num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
-                num_test_rounds = cfg.TEST.NUM_ROUNDS,
-                dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE)
+        model = DualAscentBDD.from_config(cfg, 
+            test_uses_full_instances = args.full_instances,
+            num_test_rounds = cfg.TEST.NUM_ROUNDS,
+            num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
+            dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
+            test_datanames = test_datanames)
 
     if not args.eval_only:
         trainer.fit(model, combined_train_loader, test_loaders)
-    else:
-        assert os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
-
     model.eval()
+    trainer.test(model, test_dataloaders = test_loaders)
+    print('\n\nTesting non learned updates')
+    model.non_learned_updates_test = True
     trainer.test(model, test_dataloaders = test_loaders)
 
 if __name__ == "__main__":

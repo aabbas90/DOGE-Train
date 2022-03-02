@@ -4,55 +4,61 @@ cfg = CN()
 cfg.DEVICE = 'gpu'
 
 cfg.MODEL = CN()
-cfg.MODEL.VAR_FEATURE_DIM = 32
-cfg.MODEL.CON_FEATURE_DIM = 32
-cfg.MODEL.EDGE_FEATURE_DIM = 16
-cfg.MODEL.FEATURE_EXTRACTOR_DEPTH = 5
-cfg.MODEL.BDD_LAYER_DEPTH = 1
+cfg.MODEL.VAR_FEATURE_DIM = 16
+cfg.MODEL.CON_FEATURE_DIM = 16
+cfg.MODEL.EDGE_FEATURE_DIM = 8
+cfg.MODEL.FEATURE_EXTRACTOR_DEPTH = 1
+cfg.MODEL.DUAL_PRED_DEPTH = 1
 cfg.MODEL.CKPT_PATH = None
+cfg.MODEL.OMEGA_INITIAL = 0.5
+cfg.MODEL.VAR_LP_FEATURES = ['obj', 'deg']
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg']
+cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'def_mm', 'sol', 'coeff', 'prev_dist_weights'] # For full dual ascent 'prev_dist_weights' is replaced by prev_mm_diff.
+# Calculate overall distribution weights from 'lo_costs', 'hi_costs' (def_mm = 0) and keep history?
 
 # Caution: below mentioned features are strictly necessary, more features
 # can be added but none should be removed from these. 
 cfg.DATA = CN()
-cfg.DATA.VAR_FIXED_FEATURES = ['obj', 'deg']
-cfg.DATA.CON_FIXED_FEATURES = ['rhs', 'leq', 'geq', 'lb', 'deg']
-cfg.DATA.EDGE_FIXED_FEATURES = ['mm_0', 'mm_1', 'sol', 'coeff']
 
 # Number of workers for data loader
-cfg.DATA.RANDOM_DATA_ROOT = '/home/ahabbas/data/learnDBCA/random_instances_with_lp/'
-cfg.DATA.DISK_DATA_ROOT = ''
-cfg.DATA.NUM_WORKERS = 2
+cfg.DATA.DISK_DATA_ROOT = '/home/ahabbas/data/learnDBCA/cv_structure_pred/'
+cfg.DATA.NUM_WORKERS = 0
 
-# All datasets to be used in an experiment (training and testing):
-cfg.DATA.DATASETS = ['SetCover_Random', 'IndependentSet_Random']
-cfg.DATA.TEST_FRACTION = [0.2, 0.8] 
-cfg.DATA.SetCover_Random_PARAMS = CN({'num_samples': 1024, 'n_rows': 500, 'n_cols': 1000, 'density': 0.05, 'max_coeff': 100})
-cfg.DATA.IndependentSet_Random_PARAMS = CN({'num_samples': 1024, 'n_nodes': 500, 'edge_probability': 0.25, 'affinity': 4})
-cfg.DATA.CapacitatedFacilityLocation_Random_PARAMS = CN({'num_samples': 1024})
-cfg.DATA.CombinatorialAuction_Random_PARAMS = CN({'num_samples': 1024})
-
-cfg.DATA.RAIL01_PARAMS = CN({'files_to_load': ['rail01.lp'], 'root_dir': '/BS/discrete_opt/nobackup/miplib_collection/lp_format_presolved/'}) 
-cfg.DATA.RAIL02_PARAMS = CN({'files_to_load': ['rail02.lp'], 'root_dir': '/BS/discrete_opt/nobackup/miplib_collection/lp_format_presolved/'}) 
+cfg.DATA.DATASETS = ['CT_SMALL', 'CT_SMALL'] #'CT_LARGE'] #, 'GM_WORMS_TRAIN', 'GM_WORMS_TEST'] #, 'GM_HOTEL', 'GM_HOUSE']
+cfg.DATA.TEST_FRACTION = [1.0, 0.0] #, 0.0, 1.0]
+cfg.DATA.CT_SMALL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/small/drosophila/', 'read_dual_converged' : False}) 
+#cfg.DATA.CT_SMALL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/small', 'read_dual_converged' : False}) 
+cfg.DATA.CT_LARGE_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/large', 'read_dual_converged' : False}) 
+cfg.DATA.GM_HOTEL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/hotel_house/hotel/', 'read_dual_converged' : False}) 
+cfg.DATA.GM_HOUSE_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/hotel_house/house/', 'read_dual_converged' : False}) 
+cfg.DATA.GM_WORMS_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/train_split/', 'read_dual_converged' : False}) 
+cfg.DATA.GM_WORMS_TEST_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/test_split/', 'read_dual_converged' : False}) 
 
 cfg.LOG_EVERY = 20
 cfg.TRAIN = CN()
-cfg.TRAIN.BASE_LR = 1e-4
-cfg.TRAIN.BATCH_SIZE = 32
-cfg.TRAIN.MAX_NUM_EPOCHS = 50
+cfg.TRAIN.BASE_LR = 1e-3
+cfg.TRAIN.BATCH_SIZE = 8
+cfg.TRAIN.MAX_NUM_EPOCHS = 300
 cfg.TRAIN.OPTIMIZER = "Adam"
-cfg.TRAIN.START_STEP_RANGE = [1, 15]
-cfg.TRAIN.NUM_ITERATIONS = 5
-cfg.TRAIN.BACKPROP_MM_FINITE_DIFF = False
-cfg.TRAIN.BACKPROP_MM_FINITE_DIFF_STEP_SIZE = 1.0
+
+cfg.TRAIN.NUM_ROUNDS = 1 # Max. possible number of dual iteration rounds.
+cfg.TRAIN.NUM_DUAL_ITERATIONS = 10
+cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 3 # Gradient of dual iterations would be backpropagated for a maximum of last min(GRAD_DUAL_ITR_MAX_ITR, NUM_DUAL_ITERATIONS) many iterations.
+
+cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE = 1e-6
+cfg.TRAIN.LOSS_DISCOUNT_FACTOR = 1.0
+cfg.TRAIN.LOSS_MARGIN = 5e-3
+cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 25
 
 cfg.TEST = CN()
-cfg.TEST.BATCH_SIZE = 32
-cfg.TEST.NUM_ITERATIONS = 1000
-cfg.TEST.PERIOD = 5 # Validate after every n epoch (can be less than 1).
+cfg.TEST.NUM_DUAL_ITERATIONS = 10
+cfg.TEST.NUM_ROUNDS = 1 # How many times dual iterations. #TODOAA: Implement break if slope < improvement.
+cfg.TEST.DUAL_IMPROVEMENT_SLOPE = 1e-6
+cfg.TEST.BATCH_SIZE = 1
+cfg.TEST.PERIOD = 50 # Validate after every n epoch (can be less than 1).
 cfg.SEED = 1
-cfg.OUTPUT_ROOT_DIR = '/home/ahabbas/projects/learnDBCA/out/' # Do not change, if changed exclude it from sbatch files from copying.
-cfg.OUT_REL_DIR = 'experiments_with_lp_sol/v4_SC/'
-cfg.TEST.BDD_SOLVER_EXEC = '/home/ahabbas/projects/BDD/build_debug_ninja/src/bdd_solver_cl'
+cfg.OUTPUT_ROOT_DIR = '/home/ahabbas/projects/LearnDBCA/out_dual/' # Do not change, if changed exclude it from sbatch files from copying.
+cfg.OUT_REL_DIR = 'CT/v1/'
 
 def get_cfg_defaults():
   """Get a yacs CfgNode object with default values for my_project."""

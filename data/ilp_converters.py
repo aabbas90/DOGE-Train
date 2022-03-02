@@ -28,9 +28,7 @@ class IndexManager():
 
 def create_normalized_bdd_instance(ilp_path):
     ilp_gurobi = gp.read(ilp_path)
-    ilp_gurobi.setAttr('ObjCon', 0.0) # Remove constant from objective and re-write LP.
-    ilp_gurobi.update()
-    ilp_gurobi.write(ilp_path)
+    obj_offset = ilp_gurobi.ObjCon
     obj_multiplier = 1.0
     if ilp_gurobi.ModelSense == -1: # Maximization
         obj_multiplier = -1.0
@@ -40,11 +38,12 @@ def create_normalized_bdd_instance(ilp_path):
     objs = []
     var_names = []
     for var in variables:
-        assert var.VType == 'B', f'Variable {var} is not binary in file {ilp_path} and instead of type {var.vtype()}'
+    # GM can contain continuous variables even though they will ultimately have binary value. TODOAA.
+    #     assert var.VType == 'B', f'Variable {var} is not binary in file {ilp_path} and instead of type {var.VType}'
         objs.append(var.Obj)
-        var_names.append(var.VarName)
+        var_names.append(var.VarName) 
 
-    # Scale the objective vector to [-1, 1]. (This will also change the gt_obj later).
+    # Scale the objective vector to [-1, 1]. (This will change the predicted objective value).
     obj_multiplier = obj_multiplier / np.abs(np.array(objs)).max()
     for i in range(len(objs)):
         ilp_bdd.add_new_variable_with_obj(var_names[i], obj_multiplier * float(objs[i]))
@@ -74,31 +73,25 @@ def create_normalized_bdd_instance(ilp_path):
             constraint_var_coefficients.append(int(coeff * multiplier))
             max_coeff = max(max_coeff, coeff)
         ilp_bdd.add_new_constraint(con.ConstrName, constraint_var_names, constraint_var_coefficients, int(rhs_value * multiplier), ineq_type)
-    return ilp_bdd, obj_multiplier
+    return ilp_bdd, obj_multiplier, obj_offset
 
-def map_solution_to_index(bdd_ilp_instance, solution_dict):
-    solution = np.zeros((bdd_ilp_instance.nr_variables() + 1), dtype = np.float32)
-    for var_name, var_value in solution_dict.items():
-        try:
-            var_index = bdd_ilp_instance.get_var_index(var_name)
-            solution[var_index] = float(var_value)
-        except:
-            breakpoint()
-    return solution
+def map_solution_order(solution_dict, bdd_ilp_instance):
+    sol = np.zeros(len(solution_dict)) - 1
+    for var_name, value in solution_dict.items():
+        var_index = bdd_ilp_instance.get_var_index(var_name)
+        sol[var_index] = value
+    assert(sol.min() > - 1)
+    return sol
 
 def create_bdd_repr_from_ilp(ilp_path, gt_info):
-    bdd_ilp_instance, obj_multiplier = create_normalized_bdd_instance(ilp_path)
-    gt_info['obj_multiplier'] = obj_multiplier
-    # Map variable names to indices for converting solution from dict to array:
-    if 'lp_stats' in gt_info:
-        gt_info['lp_stats']['sol'] = map_solution_to_index(bdd_ilp_instance, gt_info['lp_stats']['sol'])
-    if 'ilp_stats' in gt_info:
-        gt_info['ilp_stats']['sol'] = map_solution_to_index(bdd_ilp_instance, gt_info['ilp_stats']['sol'])
+    bdd_ilp_instance, obj_multiplier, obj_offset = create_normalized_bdd_instance(ilp_path)
+
     solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance)
     assert solver.nr_primal_variables() == bdd_ilp_instance.nr_variables(), f'Found {solver.nr_primal_variables()} variables in solver and {bdd_ilp_instance.nr_variables()} in ILP read by BDD solver.'
     assert solver.nr_bdds() == bdd_ilp_instance.nr_constraints(), f'Found {solver.nr_bdds()} BDDs in solver and {bdd_ilp_instance.nr_constraints()} constraints in ILP {ilp_path} read by BDD solver.'
     
     num_vars = solver.nr_primal_variables() + 1 # +1 due to terminal node.
+
     num_cons = solver.nr_bdds()
     num_layers = solver.nr_layers()
     var_indices = torch.empty((solver.nr_layers()), dtype = torch.int32, device = 'cuda')
@@ -108,20 +101,32 @@ def create_bdd_repr_from_ilp(ilp_path, gt_info):
     var_indices = var_indices.cpu().numpy()
     con_indices = con_indices.cpu().numpy()
     objective = np.concatenate((bdd_ilp_instance.objective(), [0]))
+    # Map gt solution variables indices according to BDD variable order:
+    for stat in ['lp_stats', 'ilp_stats']:
+        if stat in gt_info:
+            assert(len(gt_info[stat]['sol_dict']) == bdd_ilp_instance.nr_variables())
+            gt_info[stat]['sol'] = map_solution_order(gt_info[stat]['sol_dict'], bdd_ilp_instance)
+            gt_obj = gt_info[stat]['obj']
+            computed_obj = np.sum(gt_info[stat]['sol'] * objective[:-1]) / obj_multiplier + obj_offset
+            assert np.abs(computed_obj - gt_obj) < 1e-3, f'GT objectives mismatch for {ilp_path}. GT obj: {gt_obj}, Computed obj: {computed_obj}.'
+
     assert(objective.shape[0] == num_vars)
 
     # Encode constraints as features assuming that constraints are linear:
     try:
-        coefficients = solver.constraint_matrix_coefficients(bdd_ilp_instance)
+        coefficients = solver.constraint_matrix_coeffs(bdd_ilp_instance)
     except:
-        coefficients = torch.ones((solver.nr_layers()), dtype = torch.float32, device = 'cuda').cpu().numpy()
-        # breakpoint()
-    bounds = bdd_ilp_instance.variable_constraint_bounds()
+        breakpoint()
+    coefficients = np.array(coefficients)
+    con_bounds = bdd_ilp_instance.variable_constraint_bounds()[num_vars - 1:, :]
+    # Convert bounds w.r.t constraints to bounds w.r.t BDDs:
+    bdd_to_constraint_map = solver.bdd_to_constraint_map()
+    bdd_con_bounds = con_bounds[bdd_to_constraint_map, :]
     # # Constraint features:
     # # bounds containst value of lb, ub meaning: lb <= constraint <= ub.
-    bounds = torch.as_tensor(bounds)
-    lb_cons = bounds[num_vars - 1:, 0]
-    ub_cons = bounds[num_vars - 1:, 1]
+    bounds = torch.as_tensor(bdd_con_bounds)
+    lb_cons = bounds[:, 0]
+    ub_cons = bounds[:, 1]
     # lb <=(geq type) a^{T}x <=(leq type) ub. (lb can be equal to ub then the constraint is both leq and geq.)
     leq_cons = lb_cons <= np.iinfo(np.intc).min
     geq_cons = ub_cons >= np.iinfo(np.intc).max
@@ -141,7 +146,9 @@ def create_bdd_repr_from_ilp(ilp_path, gt_info):
                     "var_indices": var_indices, "con_indices": con_indices,
                     "objective": objective, 
                     "coeffs": coefficients, "rhs_vector": rhs_vector.numpy(),
-                    "constraint_type": leq_type.numpy() # Contains 1 for <= constraint and 0 for equality, where >= constraints should not be present.
+                    "constraint_type": leq_type.numpy(), # Contains 1 for <= constraint and 0 for equality, where >= constraints should not be present.
+                    "obj_multiplier": obj_multiplier, 
+                    "obj_offset": obj_offset
                 }
     return bdd_repr, gt_info
 
@@ -159,21 +166,27 @@ def create_graph_from_bdd_repr(bdd_repr, gt_info, file_path):
                                 objective = torch.from_numpy(bdd_repr['objective']).to(torch.float32),
                                 con_coeffs = torch.from_numpy(bdd_repr['coeffs']).to(torch.float32), 
                                 rhs_vector = torch.from_numpy(bdd_repr['rhs_vector']).to(torch.float32),
-                                con_type = torch.from_numpy(bdd_repr['constraint_type']).to(torch.float32))
+                                con_type = torch.from_numpy(bdd_repr['constraint_type']).to(torch.float32),
+                                obj_multiplier = bdd_repr['obj_multiplier'],
+                                obj_offset = bdd_repr['obj_offset'])
 
     graph.num_nodes = graph.num_vars + graph.num_cons
-    if gt_info is not None: # If maximization problem was converted to minimization by *(-1) then gt_obj should change as well.
-        if 'lp_stats' in gt_info:
-            gt_info['lp_stats']['obj'] = gt_info['lp_stats']['obj'] * gt_info['obj_multiplier']
-        if 'ilp_stats' in gt_info:
-            gt_info['ilp_stats']['obj'] = gt_info['ilp_stats']['obj'] * gt_info['obj_multiplier']
+    
+    # Append 0 to solution vector.
+    for stat in ['lp_stats', 'ilp_stats']:
+        if stat in gt_info:
+            assert('sol_dict' in gt_info[stat])
+            assert(gt_info[stat]['sol'].size + 1 == bdd_repr['num_vars'])
+            gt_info[stat]['sol'] = np.concatenate((gt_info[stat]['sol'], np.array([0.0])), 0)
+            gt_info[stat]['sol_dict'] = None # pyg tries to collate it.
+
     graph.gt_info = gt_info
     graph.solver_data = bdd_repr['solver_data']
     graph.file_path = file_path
     return graph
 
 class BipartiteVarConDataset(torch_geometric.data.Data):
-    def __init__(self, num_vars, num_cons, num_layers, var_indices, con_indices, objective, con_coeffs, rhs_vector, con_type):
+    def __init__(self, num_vars, num_cons, num_layers, var_indices, con_indices, objective, con_coeffs, rhs_vector, con_type, obj_multiplier, obj_offset):
         super(BipartiteVarConDataset, self).__init__()
         # super().__init__()
         self.num_vars = num_vars
@@ -183,6 +196,8 @@ class BipartiteVarConDataset(torch_geometric.data.Data):
         self.con_coeff = con_coeffs
         self.rhs_vector = rhs_vector
         self.con_type = con_type 
+        self.obj_multiplier = obj_multiplier
+        self.obj_offset =  obj_offset
         if var_indices is not None:
             assert(con_coeffs.shape == var_indices.shape)
             assert(con_coeffs.shape == con_indices.shape)

@@ -4,3 +4,5 @@ conda install pyg -c pyg -c conda-forge
 conda install -c conda-forge ecole pyscipopt
 conda install -c conda-forge tqdm
 # conda install h5py
+
+conda install -c conda-forge torchmetrics

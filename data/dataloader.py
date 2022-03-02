@@ -31,7 +31,7 @@ def get_ilp_gnn_loaders(cfg):
             test_loaders.append(DataLoader(test_dataset, 
                                     batch_size=cfg.TEST.BATCH_SIZE, 
                                     shuffle=False, 
-                                    #follow_batch = ['edge_index_var_con', 'con_fixed_f'], 
+                                    follow_batch = ['objective', 'rhs_vector', 'edge_index_var_con'], 
                                     num_workers = cfg.DATA.NUM_WORKERS))
             test_datanames.append(data_name)
     combined_train_loader = None
@@ -40,7 +40,7 @@ def get_ilp_gnn_loaders(cfg):
         combined_train_loader = DataLoader(combined_train_dataset, 
                                         batch_size=cfg.TRAIN.BATCH_SIZE, 
                                         shuffle=True, 
-                                        #follow_batch = ['edge_index_var_con', 'con_fixed_f'], 
+                                        follow_batch = ['objective', 'rhs_vector', 'edge_index_var_con'], 
                                         num_workers = cfg.DATA.NUM_WORKERS)
 
     return combined_train_loader, test_loaders, test_datanames

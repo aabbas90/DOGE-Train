@@ -3,7 +3,7 @@ import torch_geometric
 import pickle
 from tqdm import tqdm
 from data.ilp_converters import create_bdd_repr_from_ilp, create_graph_from_bdd_repr
-from data.gt_generator import presolve_and_generate_gt
+from data.gt_generator import generate_gt_gurobi
 
 def CreateSetCoverGenerator(n_rows, n_cols, density, max_coeff):
     return ecole.instance.SetCoverGenerator(n_rows, n_cols, density, max_coeff)
@@ -72,7 +72,7 @@ class ILPRandomDiskDataset(torch_geometric.data.InMemoryDataset): #TODOAA: InMem
                 ilp_ecole = next(self.random_instance_generator)
                 ilp_scip = ilp_ecole.as_pyscipopt()
                 ilp_scip.writeProblem(lp_path)
-                lp_stats, ilp_stats = presolve_and_generate_gt(lp_path)
+                lp_stats, ilp_stats = generate_gt_gurobi(lp_path)
 
             # Create BDD and save:
             gt_info = {"lp_stats": lp_stats, "ilp_stats": ilp_stats}
