@@ -103,7 +103,7 @@ def create_bdd_repr_from_ilp(ilp_path, gt_info):
     objective = np.concatenate((bdd_ilp_instance.objective(), [0]))
     # Map gt solution variables indices according to BDD variable order:
     for stat in ['lp_stats', 'ilp_stats']:
-        if stat in gt_info:
+        if stat in gt_info and gt_info[stat]['sol_dict'] is not None:
             assert(len(gt_info[stat]['sol_dict']) == bdd_ilp_instance.nr_variables())
             gt_info[stat]['sol'] = map_solution_order(gt_info[stat]['sol_dict'], bdd_ilp_instance)
             gt_obj = gt_info[stat]['obj']
@@ -174,11 +174,11 @@ def create_graph_from_bdd_repr(bdd_repr, gt_info, file_path):
     
     # Append 0 to solution vector.
     for stat in ['lp_stats', 'ilp_stats']:
-        if stat in gt_info:
+        if stat in gt_info and gt_info[stat]['sol_dict'] is not None:
             assert('sol_dict' in gt_info[stat])
             assert(gt_info[stat]['sol'].size + 1 == bdd_repr['num_vars'])
             gt_info[stat]['sol'] = np.concatenate((gt_info[stat]['sol'], np.array([0.0])), 0)
-            gt_info[stat]['sol_dict'] = None # pyg tries to collate it.
+            gt_info[stat]['sol_dict'] = None # pyg tries to collate it very slowly.
 
     graph.gt_info = gt_info
     graph.solver_data = bdd_repr['solver_data']

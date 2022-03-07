@@ -48,8 +48,9 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                         gt_info = {"lp_stats": lp_stats, "ilp_stats": ilp_stats}
                         pickle.dump(gt_info, open(sol_path, "wb"))
                     else:
-                        empty_sol = {'time': None, 'obj': None, 'sol': None}
+                        empty_sol = {'time': None, 'obj': None, 'sol_dict': None, 'sol': None}
                         gt_info = {"lp_stats": empty_sol, "ilp_stats": empty_sol}
+                        pickle.dump(gt_info, open(sol_path, "wb"))
                 else:
                     gt_info = pickle.load(open(sol_path, 'rb'))
 

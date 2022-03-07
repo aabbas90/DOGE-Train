@@ -28,4 +28,4 @@ cfg.TEST = CN()
 cfg.TEST.NUM_ITERATIONS = 500
 cfg.TEST.PERIOD = 25 # Validate after every n epochs
 
-cfg.OUT_REL_DIR = 'IS/test/'
+cfg.OUT_REL_DIR = 'IS/v1/'

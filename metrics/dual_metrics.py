@@ -11,6 +11,7 @@ class DualMetrics(Metric):
         default = torch.zeros(num_rounds, dtype=torch.float32)
         self.num_dual_iter_per_round = num_dual_iter_per_round
         self.add_state('loss', default=default, dist_reduce_fx="sum")
+        self.add_state('initial_lb_sums', default=default, dist_reduce_fx="sum")
         self.add_state('pred_lb_sums', default=default, dist_reduce_fx="sum")
         self.add_state('gt_obj_sums', default=default, dist_reduce_fx="sum")
         self.add_state('num_disagreements', default=default, dist_reduce_fx="sum")
@@ -28,7 +29,8 @@ class DualMetrics(Metric):
             gt_obj_batch, # List of gt objectives for all items in batch. Any of the items can also be None if gt not present.
             round: int,
             obj_multipliers: torch.Tensor,
-            obj_offsets: torch.Tensor):
+            obj_offsets: torch.Tensor,
+            initial_lbs):
         if loss is not None:
             self.loss[round] += loss
         self.max_round[0] = max(self.max_round[0].item(), round)
@@ -50,6 +52,7 @@ class DualMetrics(Metric):
             else:
                 self.gt_known[0] = False
             self.num_disagreements[round] += torch.logical_not(vars_agree[var_start:var_end]).sum() / num_vars
+            self.initial_lb_sums[round] += (initial_lbs[b] / obj_multipliers[b]) + obj_offsets[b]
 
             bdd_start += num_bdds
 
@@ -61,19 +64,20 @@ class DualMetrics(Metric):
             gt_obj_mean = self.gt_obj_sums / self.total_instances
 
         pred_lb_mean = self.pred_lb_sums / self.total_instances
+        initial_lb_mean = self.initial_lb_sums / self.total_instances
         percentage_disagreements = 100.0 * self.num_disagreements / self.total_instances
 
-        merged_results['pred_mean_lb'] = {}
+        lower_bounds = {}
         merged_results['percentage_disagreements'] = {}
         for r in range(num_valid_rounds):
-            tag = f'itr_{r * self.num_dual_iter_per_round}'
-            merged_results['pred_mean_lb'][tag] = pred_lb_mean[r]
+            tag = f'itr_{r * self.num_dual_iter_per_round + self.num_dual_iter_per_round}'
+            lower_bounds[f'initial_mean_lb_{tag}'] = initial_lb_mean[r]
+            lower_bounds[f'pred_mean_lb_{tag}'] = pred_lb_mean[r]
             merged_results['percentage_disagreements'][tag] = percentage_disagreements[r]
             if self.gt_known:
                 if not 'loss' in merged_results:
                     merged_results['loss'] = {}
                 merged_results['loss'].update({tag: self.loss[r]})
-                if not 'gt_mean_lb' in merged_results:
-                    merged_results['gt_mean_lb'] = {}
-                merged_results['gt_mean_lb'].update({tag:  gt_obj_mean[r]})
+                lower_bounds[f'gt_mean_lb_{tag}'] = gt_obj_mean[r]
+        merged_results['lower_bounds'] = lower_bounds
         return merged_results

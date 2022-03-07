@@ -4,8 +4,9 @@ import os
 cfg = get_cfg_defaults()
 
 def get_all_lp_instances(root_dir):
-    datasets = []
-    all_params = {}
+    data_name = 'GM_WORMS_AVG'
+    datasets = [data_name]
+    files_to_load = []
     for path, subdirs, files in os.walk(root_dir):
         for instance_name in sorted(files):
             if not instance_name.endswith('.lp') or 'nan' in instance_name or 'normalized' in instance_name:
@@ -14,13 +15,14 @@ def get_all_lp_instances(root_dir):
             if not 'worm' in instance_name:
                 continue
 
-            data_name = instance_name.replace('.lp', '')
-            datasets.append(data_name)
-            all_params[data_name + '_PARAMS'] = CN({
-                    'root_dir': root_dir, 
-                    'files_to_load': instance_name,
-                    'read_dual_converged' : True,
-                    'need_gt': False}) 
+            files_to_load.append(instance_name)
+
+    all_params = {}
+    all_params[data_name + '_PARAMS'] = CN({
+            'root_dir': root_dir, 
+            'files_to_load': files_to_load,
+            'read_dual_converged' : False,
+            'need_gt': False})
     return datasets, all_params
 
 root_dir = '/home/ahabbas/data/learnDBCA/cv_structure_pred/full_inst/'
@@ -30,7 +32,4 @@ cfg.DATA.DATASETS = datasets
 cfg.DATA.TEST_FRACTION = [1.0] * len(datasets)
 cfg.DATA.update(all_params)
 
-cfg.MODEL.CKPT_PATH = 'out_primal/CT/v1_sep_metrics_1_1_8_16_8_3/default/version_1/checkpoints/last.ckpt'
-cfg.TEST.NUM_DUAL_ITERATIONS = 500
-cfg.TEST.NUM_ROUNDS = 50
 cfg.TEST.BATCH_SIZE = 1

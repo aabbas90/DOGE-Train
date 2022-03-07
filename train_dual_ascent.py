@@ -31,20 +31,6 @@ def get_final_config(args):
     print("Wrote config file at: {}".format(path))
     return cfg, output_dir
 
-def get_freer_gpu():
-    os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free >tmp')
-    memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
-    if len(memory_available) == 0:
-        return -1
-    return np.argmax(memory_available)
-
-def get_latest_checkpoint(output_dir):
-    rel_path = 'default/version_0/checkpoints/last.ckpt'
-    p = os.path.join(output_dir, rel_path)
-    assert os.path.exists(p), f"Automatic checkpoint detector could not find at default path: {p}."
-    print(f"Found checkpoint: {p} for evaluation.")
-    return p
-
 def main(args):
     cfg, output_dir = get_final_config(args)   
     seed_everything(cfg.SEED)
@@ -57,8 +43,11 @@ def main(args):
         #     gpus = [gpu_id]
 
     tb_logger = TensorBoardLogger(output_dir, default_hp_metric=False)
-    assert cfg.MODEL.CKPT_PATH is None or os.path.isfile(cfg.MODEL.CKPT_PATH), "CKPT not found."
-    checkpoint_callback = ModelCheckpoint(save_last=True)
+    ckpt_path = None
+    if cfg.MODEL.CKPT_PATH is not None:
+        ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.MODEL.CKPT_PATH)
+    assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
+    checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.PERIOD)
     trainer = Trainer(deterministic=False,  # due to https://github.com/pyg-team/pytorch_geometric/issues/3175#issuecomment-1047886622
                     gpus = gpus,
                     max_epochs = cfg.TRAIN.MAX_NUM_EPOCHS, 
@@ -71,10 +60,6 @@ def main(args):
                     callbacks=[checkpoint_callback])
 
     combined_train_loader, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
-    ckpt_path = cfg.MODEL.CKPT_PATH
-    if args.eval_only and ckpt_path is None:
-        ckpt_path = get_latest_checkpoint(os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR))
-
     if ckpt_path is not None:
         print(f'Loading checkpoint and hyperparameters from: {ckpt_path}')
         model = DualAscentBDD.load_from_checkpoint(ckpt_path,
@@ -95,9 +80,14 @@ def main(args):
     if not args.eval_only:
         trainer.fit(model, combined_train_loader, test_loaders)
     model.eval()
-    trainer.test(model, test_dataloaders = test_loaders)
-    print('\n\nTesting non learned updates')
-    model.non_learned_updates_test = True
+
+    if args.test_non_learned:
+        print('\n\nTesting non learned updates')
+        model.non_learned_updates_test = True
+        trainer.test(model, test_dataloaders = test_loaders)
+
+    print('\n\nTesting learned updates')
+    model.non_learned_updates_test = False
     trainer.test(model, test_dataloaders = test_loaders)
 
 if __name__ == "__main__":
@@ -105,6 +95,7 @@ if __name__ == "__main__":
     parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
     parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
     parser.add_argument("--full-instances", action="store_true", help="Treats each test dataset separately if using full instances.")
+    parser.add_argument("--test-non-learned", action="store_true", help="Runs FastDOG updates.")
     parser.add_argument(
         "opts",
         help="Modify config options by adding 'KEY VALUE' pairs at the end of the command. ",

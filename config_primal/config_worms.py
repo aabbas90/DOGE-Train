@@ -21,5 +21,5 @@ cfg.TRAIN.LOSS_MARGIN = 5e-3
 
 cfg.TEST.NUM_DUAL_ITERATIONS = 200
 cfg.TEST.NUM_ROUNDS = 20 # How many times rounding iterations.
-cfg.TEST.BATCH_SIZE = 4
+cfg.TEST.BATCH_SIZE = 1
 cfg.TEST.PERIOD = 50 # Validate after every n epoch (can be less than 1).

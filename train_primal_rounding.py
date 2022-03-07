@@ -22,13 +22,13 @@ def get_final_config(args):
     cfg.freeze()
     output_dir = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR)
     os.makedirs(output_dir, exist_ok=True)
-    path = os.path.join(output_dir, "config.yaml")
-    with open(path, 'w') as yaml_file:
-        cfg.dump(stream = yaml_file, default_flow_style=False)
+    #path = os.path.join(output_dir, "config.yaml")
+    # with open(path, 'w') as yaml_file:
+    #     cfg.dump(stream = yaml_file, default_flow_style=False)
 
-    print('USING FOLLOWING CONFIG:')
-    print(cfg)
-    print("Wrote config file at: {}".format(path))
+    #print('USING FOLLOWING CONFIG:')
+    #print(cfg)
+    #print("Wrote config file at: {}".format(path))
     return cfg, output_dir
 
 def get_freer_gpu():
@@ -52,9 +52,9 @@ def main(args):
     tb_logger = TensorBoardLogger(output_dir, default_hp_metric=False)
     ckpt_path = None
     if cfg.MODEL.CKPT_PATH is not None:
-        ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.MODEL.CKPT_PATH)
+        ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR, cfg.MODEL.CKPT_PATH)
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
-    checkpoint_callback = ModelCheckpoint(save_last=True)
+    checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.PERIOD)
     trainer = Trainer(deterministic=False,  # due to https://github.com/pyg-team/pytorch_geometric/issues/3175#issuecomment-1047886622
                     gpus = gpus,
                     max_epochs = cfg.TRAIN.MAX_NUM_EPOCHS, 
@@ -84,13 +84,20 @@ def main(args):
                 num_test_rounds = cfg.TEST.NUM_ROUNDS,
                 dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE)
 
+    print(model)
     if not args.eval_only:
         trainer.fit(model, combined_train_loader, test_loaders)
     else:
         assert os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
 
     model.eval()
+
+    print('\n\nTesting non learned updates')
+    model.non_learned_updates_test = True
     trainer.test(model, test_dataloaders = test_loaders)
+
+    # model.non_learned_updates_test = False
+    # trainer.test(model, test_dataloaders = test_loaders)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -51,6 +51,7 @@ cfg.TRAIN.MAX_NUM_EPOCHS = 500
 cfg.TRAIN.OPTIMIZER = "Adam"
 
 cfg.TRAIN.NUM_ROUNDS = 20 # Max. possible number of rounding iterations.
+cfg.TRAIN.NUM_ROUNDS_WITH_GRAD = 1 # Number of rounds in which gradients are backpropagated.
 cfg.TRAIN.NUM_DUAL_ITERATIONS = 10
 cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 3 # Gradient of dual iterations would be backpropagated for a maximum of last min(GRAD_DUAL_ITR_MAX_ITR, NUM_DUAL_ITERATIONS) many iterations.
 
@@ -63,7 +64,7 @@ cfg.TEST = CN()
 cfg.TEST.NUM_DUAL_ITERATIONS = 200
 cfg.TEST.NUM_ROUNDS = 20 # How many times rounding iterations.
 cfg.TEST.DUAL_IMPROVEMENT_SLOPE = 1e-6
-cfg.TEST.BATCH_SIZE = 4
+cfg.TEST.BATCH_SIZE = 1
 cfg.TEST.PERIOD = 50 # Validate after every n epoch (can be less than 1).
 cfg.SEED = 1
 cfg.OUTPUT_ROOT_DIR = '/home/ahabbas/projects/LearnDBCA/out_primal/' # Do not change, if changed exclude it from sbatch files from copying.

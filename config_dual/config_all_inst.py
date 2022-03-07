@@ -11,7 +11,7 @@ def get_all_lp_instances(root_dir):
             if not instance_name.endswith('.lp') or 'nan' in instance_name or 'normalized' in instance_name:
                 continue
 
-            if not 'worm' in instance_name:
+            if not 'worm01' in instance_name:
                 continue
 
             data_name = instance_name.replace('.lp', '')
@@ -19,7 +19,7 @@ def get_all_lp_instances(root_dir):
             all_params[data_name + '_PARAMS'] = CN({
                     'root_dir': root_dir, 
                     'files_to_load': instance_name,
-                    'read_dual_converged' : True,
+                    'read_dual_converged' : False,
                     'need_gt': False}) 
     return datasets, all_params
 
@@ -30,7 +30,4 @@ cfg.DATA.DATASETS = datasets
 cfg.DATA.TEST_FRACTION = [1.0] * len(datasets)
 cfg.DATA.update(all_params)
 
-cfg.MODEL.CKPT_PATH = 'out_primal/CT/v1_sep_metrics_1_1_8_16_8_3/default/version_1/checkpoints/last.ckpt'
-cfg.TEST.NUM_DUAL_ITERATIONS = 500
-cfg.TEST.NUM_ROUNDS = 50
 cfg.TEST.BATCH_SIZE = 1

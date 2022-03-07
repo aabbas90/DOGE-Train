@@ -12,6 +12,7 @@ class PrimalMetrics(Metric):
         self.add_state('loss', default=default, dist_reduce_fx="sum")
         self.add_state('pred_objective_sums', default=default, dist_reduce_fx="sum")
         self.add_state('gt_objective_sums', default=default, dist_reduce_fx="sum")
+        self.add_state('initial_lbs', default=default, dist_reduce_fx="sum")
         self.add_state('num_disagreements', default=default, dist_reduce_fx="sum")
         self.add_state('num_solved', default=default + 1e-7, dist_reduce_fx="sum")
         self.add_state('total_instances', default=default + 1e-7, dist_reduce_fx="sum")
@@ -27,7 +28,8 @@ class PrimalMetrics(Metric):
             num_vars_per_instance: torch.Tensor, 
             round: int,
             obj_multipliers: torch.Tensor,
-            obj_offsets: torch.Tensor):
+            obj_offsets: torch.Tensor, 
+            initial_lbs):
 
         if loss is not None:
             self.loss[round] += loss
@@ -57,20 +59,24 @@ class PrimalMetrics(Metric):
             else:
                 self.num_disagreements[round] += torch.logical_not(vars_agree[prev_var_start:var_end]).sum() / current_num_vars
 
+            self.initial_lbs[round] += (initial_lbs[b] / obj_multipliers[b]) + obj_offsets[b]
             self.total_instances[round] += 1.0
             prev_var_start = var_end + 1 # To account for terminal node.
 
     def compute(self):
         num_valid_rounds = self.max_round[0].item() + 1
         percentage_disagreements = 100.0 * self.num_disagreements / self.total_instances
+        initial_lb_mean = self.initial_lbs / self.total_instances
         pred_mean_obj_of_solved = self.pred_objective_sums / self.num_solved
         if self.gt_known[0].item():
             gt_mean_obj_of_solved = self.gt_objective_sums / self.num_solved
         
         merged_results = {}
         merged_results['percentage_disagreements'] = {}
+        merged_results['initial_mean_lb'] = {}
         for r in range(num_valid_rounds):
             merged_results['percentage_disagreements'][f'round_{r}'] = percentage_disagreements[r]
+            merged_results['initial_mean_lb'][f'round_{r}'] = initial_lb_mean[r]
             if self.num_solved[r] == self.total_instances[r]:
                 if not 'pred_mean_obj' in merged_results:
                     merged_results['pred_mean_obj'] = {}

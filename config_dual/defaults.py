@@ -4,6 +4,9 @@ cfg = CN()
 cfg.DEVICE = 'gpu'
 
 cfg.MODEL = CN()
+cfg.MODEL.FULL_COORDINATE_ASCENT = False
+cfg.MODEL.PREDICT_OMEGA = False
+cfg.MODEL.SKIP_CONNECTIONS = False
 cfg.MODEL.VAR_FEATURE_DIM = 16
 cfg.MODEL.CON_FEATURE_DIM = 16
 cfg.MODEL.EDGE_FEATURE_DIM = 8
@@ -11,9 +14,10 @@ cfg.MODEL.FEATURE_EXTRACTOR_DEPTH = 1
 cfg.MODEL.DUAL_PRED_DEPTH = 1
 cfg.MODEL.CKPT_PATH = None
 cfg.MODEL.OMEGA_INITIAL = 0.5
+cfg.MODEL.USE_LAYER_NORM = True
 cfg.MODEL.VAR_LP_FEATURES = ['obj', 'deg']
 cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'def_mm', 'sol', 'coeff', 'prev_dist_weights'] # For full dual ascent 'prev_dist_weights' is replaced by prev_mm_diff.
+cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'def_mm', 'sol', 'coeff', 'prev_dist_weights']
 # Calculate overall distribution weights from 'lo_costs', 'hi_costs' (def_mm = 0) and keep history?
 
 # Caution: below mentioned features are strictly necessary, more features
@@ -36,14 +40,15 @@ cfg.DATA.GM_WORMS_TEST_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahab
 
 cfg.LOG_EVERY = 20
 cfg.TRAIN = CN()
-cfg.TRAIN.BASE_LR = 1e-3
+cfg.TRAIN.BASE_LR = 1e-4
 cfg.TRAIN.BATCH_SIZE = 8
 cfg.TRAIN.MAX_NUM_EPOCHS = 300
 cfg.TRAIN.OPTIMIZER = "Adam"
 
 cfg.TRAIN.NUM_ROUNDS = 1 # Max. possible number of dual iteration rounds.
+cfg.TRAIN.NUM_ROUNDS_WITH_GRAD = 1 # Number of rounds in which gradients are backpropagated.
 cfg.TRAIN.NUM_DUAL_ITERATIONS = 10
-cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 3 # Gradient of dual iterations would be backpropagated for a maximum of last min(GRAD_DUAL_ITR_MAX_ITR, NUM_DUAL_ITERATIONS) many iterations.
+cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 10 # Gradient of dual iterations would be backpropagated for a maximum of last min(GRAD_DUAL_ITR_MAX_ITR, NUM_DUAL_ITERATIONS) many iterations.
 
 cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE = 1e-6
 cfg.TRAIN.LOSS_DISCOUNT_FACTOR = 1.0
