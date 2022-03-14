@@ -47,54 +47,53 @@ def main(args):
     if cfg.MODEL.CKPT_PATH is not None:
         ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.MODEL.CKPT_PATH)
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
-    checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.PERIOD)
+    checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.VAL_PERIOD, save_top_k=1, monitor='val_loss')
+    num_sanity_val_steps = 0
+    if args.test_non_learned:
+        num_sanity_val_steps = -1
     trainer = Trainer(deterministic=False,  # due to https://github.com/pyg-team/pytorch_geometric/issues/3175#issuecomment-1047886622
                     gpus = gpus,
                     max_epochs = cfg.TRAIN.MAX_NUM_EPOCHS, 
                     default_root_dir=output_dir,
-                    check_val_every_n_epoch = cfg.TEST.PERIOD,
+                    check_val_every_n_epoch = cfg.TEST.VAL_PERIOD,
                     logger = tb_logger, 
                     resume_from_checkpoint = cfg.MODEL.CKPT_PATH, 
-                    num_sanity_val_steps=0, 
+                    num_sanity_val_steps = num_sanity_val_steps, 
                     log_every_n_steps=cfg.LOG_EVERY,
                     callbacks=[checkpoint_callback])
 
-    combined_train_loader, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
+    combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
     if ckpt_path is not None:
         print(f'Loading checkpoint and hyperparameters from: {ckpt_path}')
         model = DualAscentBDD.load_from_checkpoint(ckpt_path,
-            test_uses_full_instances = args.full_instances,
             num_test_rounds = cfg.TEST.NUM_ROUNDS,
             num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
             dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
-            test_datanames = test_datanames)
+            val_datanames = val_datanames,
+            test_datanames = test_datanames,
+            non_learned_updates_test = args.test_non_learned)
     else:
         print(f'Initializing from scratch.')
         model = DualAscentBDD.from_config(cfg, 
-            test_uses_full_instances = args.full_instances,
             num_test_rounds = cfg.TEST.NUM_ROUNDS,
             num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
             dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
-            test_datanames = test_datanames)
+            val_datanames = val_datanames,
+            test_datanames = test_datanames,
+            non_learned_updates_test = args.test_non_learned)
 
     if not args.eval_only:
-        trainer.fit(model, combined_train_loader, test_loaders)
-    model.eval()
-
-    if args.test_non_learned:
-        print('\n\nTesting non learned updates')
-        model.non_learned_updates_test = True
+        trainer.fit(model, combined_train_loader, val_loaders)
+        model.eval()
+        trainer.test(model, test_dataloaders = test_loaders, ckpt_path = 'best')
+    else:
+        model.eval()
         trainer.test(model, test_dataloaders = test_loaders)
-
-    print('\n\nTesting learned updates')
-    model.non_learned_updates_test = False
-    trainer.test(model, test_dataloaders = test_loaders)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
     parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
-    parser.add_argument("--full-instances", action="store_true", help="Treats each test dataset separately if using full instances.")
     parser.add_argument("--test-non-learned", action="store_true", help="Runs FastDOG updates.")
     parser.add_argument(
         "opts",

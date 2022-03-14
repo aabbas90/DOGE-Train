@@ -22,13 +22,13 @@ def get_final_config(args):
     cfg.freeze()
     output_dir = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR)
     os.makedirs(output_dir, exist_ok=True)
-    #path = os.path.join(output_dir, "config.yaml")
-    # with open(path, 'w') as yaml_file:
-    #     cfg.dump(stream = yaml_file, default_flow_style=False)
+    path = os.path.join(output_dir, "config.yaml")
+    with open(path, 'w') as yaml_file:
+        cfg.dump(stream = yaml_file, default_flow_style=False)
 
-    #print('USING FOLLOWING CONFIG:')
-    #print(cfg)
-    #print("Wrote config file at: {}".format(path))
+    print('USING FOLLOWING CONFIG:')
+    print(cfg)
+    print("Wrote config file at: {}".format(path))
     return cfg, output_dir
 
 def get_freer_gpu():
@@ -54,56 +54,51 @@ def main(args):
     if cfg.MODEL.CKPT_PATH is not None:
         ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR, cfg.MODEL.CKPT_PATH)
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
-    checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.PERIOD)
+    checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.VAL_PERIOD)
     trainer = Trainer(deterministic=False,  # due to https://github.com/pyg-team/pytorch_geometric/issues/3175#issuecomment-1047886622
                     gpus = gpus,
                     max_epochs = cfg.TRAIN.MAX_NUM_EPOCHS, 
                     default_root_dir=output_dir,
-                    check_val_every_n_epoch = cfg.TEST.PERIOD,
+                    check_val_every_n_epoch = cfg.TEST.VAL_PERIOD,
                     logger = tb_logger, 
-                    resume_from_checkpoint = ckpt_path, 
+                    resume_from_checkpoint = ckpt_path,
                     num_sanity_val_steps=0, 
                     log_every_n_steps=cfg.LOG_EVERY,
                     callbacks=[checkpoint_callback])
 
-    combined_train_loader, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
+    combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
     if ckpt_path is not None:
         print(f'Loading checkpoint and hyperparameters from: {ckpt_path}')
         model = PrimalRoundingBDD.load_from_checkpoint(ckpt_path, 
+                val_datanames = val_datanames,
                 test_datanames = test_datanames, 
-                test_uses_full_instances = args.full_instances,
+                non_learned_updates_test = args.test_non_learned,
                 num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
                 num_test_rounds = cfg.TEST.NUM_ROUNDS,
                 dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE)
     else:
         print(f'Initializing from scratch.')
         model = PrimalRoundingBDD.from_config(cfg, 
-                test_datanames, 
-                test_uses_full_instances = args.full_instances,
+                val_datanames = val_datanames,
+                test_datanames = test_datanames, 
+                non_learned_updates_test = args.test_non_learned,
                 num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
                 num_test_rounds = cfg.TEST.NUM_ROUNDS,
                 dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE)
 
-    print(model)
     if not args.eval_only:
-        trainer.fit(model, combined_train_loader, test_loaders)
+        trainer.fit(model, combined_train_loader, val_loaders)
     else:
         assert os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
 
     model.eval()
-
-    print('\n\nTesting non learned updates')
-    model.non_learned_updates_test = True
     trainer.test(model, test_dataloaders = test_loaders)
-
-    # model.non_learned_updates_test = False
-    # trainer.test(model, test_dataloaders = test_loaders)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
     parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
-    parser.add_argument("--full-instances", action="store_true", help="Treats each test dataset separately if using full instances.")
+    parser.add_argument("--test-non-learned", action="store_true", help="Runs FastDOG updates.")
     parser.add_argument(
         "opts",
         help="Modify config options by adding 'KEY VALUE' pairs at the end of the command. ",

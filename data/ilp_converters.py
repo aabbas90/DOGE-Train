@@ -83,7 +83,7 @@ def map_solution_order(solution_dict, bdd_ilp_instance):
     assert(sol.min() > - 1)
     return sol
 
-def create_bdd_repr_from_ilp(ilp_path, gt_info):
+def create_bdd_repr_from_ilp(ilp_path, gt_info, load_constraint_coeffs = False):
     bdd_ilp_instance, obj_multiplier, obj_offset = create_normalized_bdd_instance(ilp_path)
 
     solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance)
@@ -112,41 +112,47 @@ def create_bdd_repr_from_ilp(ilp_path, gt_info):
 
     assert(objective.shape[0] == num_vars)
 
+    if load_constraint_coeffs:
     # Encode constraints as features assuming that constraints are linear:
-    try:
-        coefficients = solver.constraint_matrix_coeffs(bdd_ilp_instance)
-    except:
-        breakpoint()
-    coefficients = np.array(coefficients)
-    con_bounds = bdd_ilp_instance.variable_constraint_bounds()[num_vars - 1:, :]
-    # Convert bounds w.r.t constraints to bounds w.r.t BDDs:
-    bdd_to_constraint_map = solver.bdd_to_constraint_map()
-    bdd_con_bounds = con_bounds[bdd_to_constraint_map, :]
-    # # Constraint features:
-    # # bounds containst value of lb, ub meaning: lb <= constraint <= ub.
-    bounds = torch.as_tensor(bdd_con_bounds)
-    lb_cons = bounds[:, 0]
-    ub_cons = bounds[:, 1]
-    # lb <=(geq type) a^{T}x <=(leq type) ub. (lb can be equal to ub then the constraint is both leq and geq.)
-    leq_cons = lb_cons <= np.iinfo(np.intc).min
-    geq_cons = ub_cons >= np.iinfo(np.intc).max
-    assert(~torch.any(torch.logical_and(leq_cons, geq_cons)))
-    leq_type = torch.ones((num_cons))
-    geq_type = torch.ones((num_cons))
-    leq_type[geq_cons] = 0
-    geq_type[leq_cons] = 0
-    if torch.abs((1 - leq_type) * geq_type).max() > 0:
-        raise ValueError('all constraints should be <= or = type')
-    rhs_vector = lb_cons
-    rhs_vector[leq_cons] = ub_cons[leq_cons]
-
+        try:
+            coefficients = solver.constraint_matrix_coeffs(bdd_ilp_instance)
+        except:
+            breakpoint()
+        coefficients = np.array(coefficients)
+        con_bounds = bdd_ilp_instance.variable_constraint_bounds()[num_vars - 1:, :]
+        # Convert bounds w.r.t constraints to bounds w.r.t BDDs:
+        bdd_to_constraint_map = solver.bdd_to_constraint_map()
+        bdd_con_bounds = con_bounds[bdd_to_constraint_map, :]
+        # # Constraint features:
+        # # bounds containst value of lb, ub meaning: lb <= constraint <= ub.
+        bounds = torch.as_tensor(bdd_con_bounds)
+        lb_cons = bounds[:, 0]
+        ub_cons = bounds[:, 1]
+        # lb <=(geq type) a^{T}x <=(leq type) ub. (lb can be equal to ub then the constraint is both leq and geq.)
+        leq_cons = lb_cons <= np.iinfo(np.intc).min
+        geq_cons = ub_cons >= np.iinfo(np.intc).max
+        assert(~torch.any(torch.logical_and(leq_cons, geq_cons)))
+        leq_type = torch.ones((num_cons))
+        geq_type = torch.ones((num_cons))
+        leq_type[geq_cons] = 0
+        geq_type[leq_cons] = 0
+        if torch.abs((1 - leq_type) * geq_type).max() > 0:
+            raise ValueError('all constraints should be <= or = type')
+        rhs_vector = lb_cons
+        rhs_vector[leq_cons] = ub_cons[leq_cons]
+        rhs_vector = rhs_vector.numpy()
+        leq_type = leq_type.numpy()
+    else:
+        rhs_vector = None
+        coefficients = None
+        leq_type = None
     bdd_repr = {
                     "solver_data": pickle.dumps(solver, -1), # bytes representation of bdd cuda solver internal variables.
                     "num_vars": num_vars, "num_cons": num_cons, "num_layers": num_layers,
                     "var_indices": var_indices, "con_indices": con_indices,
                     "objective": objective, 
-                    "coeffs": coefficients, "rhs_vector": rhs_vector.numpy(),
-                    "constraint_type": leq_type.numpy(), # Contains 1 for <= constraint and 0 for equality, where >= constraints should not be present.
+                    "coeffs": coefficients, "rhs_vector": rhs_vector,
+                    "constraint_type": leq_type, # Contains 1 for <= constraint and 0 for equality, where >= constraints should not be present.
                     "obj_multiplier": obj_multiplier, 
                     "obj_offset": obj_offset
                 }

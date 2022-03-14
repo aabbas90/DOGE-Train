@@ -38,9 +38,11 @@ class FeatureExtractorLayer(torch.nn.Module):
                 num_var_lp_f, in_var_dim, out_var_dim, 
                 num_con_lp_f, in_con_dim, out_con_dim,
                 num_edge_lp_f, in_edge_dim, out_edge_dim,
-                use_layer_norm, use_skip_connections = False):
+                use_layer_norm, use_skip_connections = False, 
+                use_def_mm = True):
         super(FeatureExtractorLayer, self).__init__()
 
+        self.use_def_mm = use_def_mm
         self.con_updater = TransformerConv((num_var_lp_f + in_var_dim, num_con_lp_f + in_con_dim), 
                                             out_con_dim, 
                                             edge_dim = num_edge_lp_f + in_edge_dim, 
@@ -70,7 +72,11 @@ class FeatureExtractorLayer(torch.nn.Module):
         # 0. Combine learned and fixed features:
         var_comb_f = self.combine_features(var_learned_f, var_lp_f)
         con_comb_f = self.combine_features(con_learned_f, con_lp_f)
-        edge_comb_f = torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_rest_lp_f), 1)
+        if self.use_def_mm:
+            edge_comb_f = torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_rest_lp_f), 1)
+        else:
+            edge_comb_f = torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), edge_rest_lp_f), 1)
+
         # edge_comb_f_valid = edge_comb_f[valid_edge_mask, :]
         # edge_index_var_con_valid = edge_index_var_con[:, valid_edge_mask]
         
@@ -105,31 +111,33 @@ def get_edge_mask_without_terminal_nodes(edge_index_var_con, var_degree):
     return non_terminal_edges_mask
 
 class FeatureExtractor(torch.nn.Module):
-    def __init__(self, num_var_lp_f, out_var_dim, num_con_lp_f, out_con_dim, num_edge_lp_f, out_edge_dim, depth, use_layer_norm = False, skip_connections = False):
+    def __init__(self, num_var_lp_f, out_var_dim, num_con_lp_f, out_con_dim, num_edge_lp_f, out_edge_dim, depth, 
+                use_layer_norm = False, skip_connections = False, use_def_mm = True):
         super(FeatureExtractor, self).__init__()
         self.num_var_lp_f = num_var_lp_f
         self.num_con_lp_f = num_con_lp_f
         self.num_edge_lp_f = num_edge_lp_f
         self.skip_connections = skip_connections
+        self.use_def_mm = use_def_mm
         layers = [
             FeatureExtractorLayer(num_var_lp_f, 0, out_var_dim,
                                 num_con_lp_f, 0, out_con_dim,
                                 num_edge_lp_f, 0, out_edge_dim,
-                                use_layer_norm, False)
+                                use_layer_norm, False, use_def_mm)
         ]
         for l in range(depth - 1):
             layers.append(
                 FeatureExtractorLayer(num_var_lp_f, out_var_dim, out_var_dim,
                                     num_con_lp_f, out_con_dim, out_con_dim,
                                     num_edge_lp_f, out_edge_dim, out_edge_dim,
-                                    use_layer_norm, skip_connections)
+                                    use_layer_norm, skip_connections, use_def_mm)
             )
         self.layers = torch.nn.ModuleList(layers)
 
     def forward(self, var_lp_f, con_lp_f, solver_state, edge_rest_lp_f, edge_index_var_con):
         assert(var_lp_f.shape[1] == self.num_var_lp_f)
         assert(con_lp_f.shape[1] == self.num_con_lp_f)
-        assert(edge_rest_lp_f.shape[1] == self.num_edge_lp_f - 3) # 3 for solver state.
+        assert(edge_rest_lp_f.shape[1] == self.num_edge_lp_f - 3 + int(not self.use_def_mm)) # 3 for solver state.
         #var_degree = var_lp_f[:, 1]
         #valid_edge_mask = get_edge_mask_without_terminal_nodes(edge_index_var_con, var_degree)
         var_learned_f = torch.zeros((var_lp_f.shape[0], 0), device = var_lp_f.device)
@@ -145,19 +153,22 @@ class FeatureExtractor(torch.nn.Module):
         return var_learned_f, con_learned_f, edge_learned_f
 
 class PrimalPerturbationBlock(torch.nn.Module):
-    def __init__(self, num_var_lp_f, num_con_lp_f, num_edge_lp_f, depth, var_dim, con_dim, edge_dim, use_layer_norm = False, predict_dist_weights = False, skip_connections = False):
+    def __init__(self, num_var_lp_f, num_con_lp_f, num_edge_lp_f, depth, var_dim, con_dim, edge_dim, min_perturbation, 
+                use_layer_norm = False, predict_dist_weights = False, skip_connections = False):
         super(PrimalPerturbationBlock, self).__init__()
+        assert(not predict_dist_weights)
+        self.min_perturbation = min_perturbation
         self.feature_refinement = []
         for d in range(depth):
             self.feature_refinement.append(FeatureExtractorLayer(num_var_lp_f, var_dim, var_dim,
                                                                 num_con_lp_f, con_dim, con_dim,   
                                                                 num_edge_lp_f, edge_dim, edge_dim,
-                                                                use_layer_norm, skip_connections))
+                                                                use_layer_norm, skip_connections, False))
 
         self.feature_refinement = torch.nn.ModuleList(self.feature_refinement)
-        self.pert_predictor = nn.Sequential(nn.Linear(num_var_lp_f + var_dim + 1, num_var_lp_f + var_dim),
+        self.pert_predictor = nn.Sequential(nn.Linear(num_edge_lp_f - 2 + edge_dim, num_edge_lp_f + edge_dim),
                                             nn.ReLU(True),
-                                            nn.Linear(num_var_lp_f + var_dim, 1))
+                                            nn.Linear(num_edge_lp_f + edge_dim, 1))
         if predict_dist_weights:
             self.dist_weights_predictor = nn.Sequential(nn.Linear(edge_dim + num_edge_lp_f - 3, edge_dim),
                                                 nn.ReLU(True),
@@ -165,16 +176,20 @@ class PrimalPerturbationBlock(torch.nn.Module):
         else:
             self.dist_weights_predictor = None
 
-        # self.mm_multiplier = nn.Parameter(torch.ones(1))
-        # self.pert_multiplier = nn.Parameter(torch.ones(1) * 1e-3)
-
     def forward(self, solvers, var_lp_f, con_lp_f, 
                 solver_state, edge_rest_lp_f, 
                 var_learned_f, con_learned_f, edge_learned_f, 
                 dist_weights, omega, edge_index_var_con,
                 num_dual_iterations, grad_dual_itr_max_itr, dual_improvement_slope,
-                batch_index_var):
+                batch_index_var, batch_index_con, batch_index_edge, norms):
 
+        # First normalize input costs:
+        prev_lb = con_lp_f[:, 0].clone()
+        prev_mm_diff = edge_rest_lp_f[:, 2].clone()
+        solver_state, normalized_lb, norm_mm_diff, norms = sol_utils.normalize_costs(solver_state, prev_lb, prev_mm_diff, norms, batch_index_edge, batch_index_con)
+
+        con_lp_f[:, 0] = normalized_lb
+        edge_rest_lp_f[:, 2] = norm_mm_diff
         try:
             assert(torch.all(torch.isfinite(var_learned_f)))
             assert(torch.all(torch.isfinite(con_learned_f)))
@@ -182,8 +197,6 @@ class PrimalPerturbationBlock(torch.nn.Module):
         except:
             breakpoint()
 
-        #var_degree = var_lp_f[:, 1]
-        #valid_edge_mask = get_edge_mask_without_terminal_nodes(edge_index_var_con, var_degree)
         for d in range(len(self.feature_refinement)):
             var_learned_f, con_learned_f, edge_learned_f = self.feature_refinement[d](
                     var_learned_f, var_lp_f, con_learned_f, con_lp_f, edge_learned_f, solver_state, edge_rest_lp_f, edge_index_var_con
@@ -195,23 +208,30 @@ class PrimalPerturbationBlock(torch.nn.Module):
             except:
                 breakpoint()
 
-        var_indices = edge_index_var_con[0]
-        mm_diff_sum = scatter_sum(edge_rest_lp_f[:, 2], var_indices)
-        primal_perturbation = self.pert_predictor(torch.cat((var_learned_f, var_lp_f, mm_diff_sum.unsqueeze(1)), 1)).squeeze() 
+        primal_perturbation = 0.1 * self.pert_predictor(torch.cat((edge_learned_f, edge_rest_lp_f), 1)).squeeze()
 
-        net_primal_cost = var_lp_f[:, 0] + primal_perturbation
-        # Make net_primal_cost have L2 norm = 1:
-        normalized_net_primal_cost, _  = sol_utils.normalize_objective_batch(net_primal_cost, batch_index_var)
+        # Make net primal costs have L2 norm = 1:
+        p_lo_cost = torch.relu(primal_perturbation + self.min_perturbation * 0.5)
+        p_hi_cost = torch.relu(-primal_perturbation + self.min_perturbation * 0.5)
+        # norm_costs_batch = torch.sqrt(scatter_sum(torch.square(new_hi_cost), batch_index_var)) + torch.sqrt(scatter_sum(torch.square(new_lo_cost), batch_index_var))
         
-        # Zero-out current primal objective in var_lp_f[:, 2] and add net primal cost.
-        normalized_net_primal_pert = normalized_net_primal_cost - var_lp_f[:, 0]
+        # normalized_lo_cost = new_lo_cost / norm_costs_batch[batch_index_var]
+        # normalized_hi_cost = new_hi_cost / norm_costs_batch[batch_index_var]
+    
+        # Zero-out current primal objective in var_lp_f[:, 0] and add net primal cost.
+        # normalized_net_lo_cost_pert = normalized_lo_cost - var_lp_f[:, 0]
+        # normalized_net_hi_cost_pert = normalized_hi_cost - var_lp_f[:, 1]
+        # var_lp_f[:, 0] = normalized_net_lo_cost_pert
+        # var_lp_f[:, 1] = normalized_net_hi_cost_pert
 
         try:
-            assert(torch.all(torch.isfinite(normalized_net_primal_pert)))
+            assert(torch.all(torch.isfinite(primal_perturbation)))
         except:
             breakpoint()
 
-        solver_state['lo_costs'], solver_state['hi_costs'] = sol_utils.perturb_primal_costs(solver_state['lo_costs'], solver_state['hi_costs'], normalized_net_primal_pert, edge_index_var_con)
+        #solver_state['lo_costs'], solver_state['hi_costs'] = sol_utils.perturb_primal_costs(solver_state['lo_costs'], solver_state['hi_costs'], normalized_net_lo_cost_pert, normalized_net_hi_cost_pert, dist_weights, edge_index_var_con)
+        solver_state['lo_costs'] = solver_state['lo_costs'] + p_lo_cost
+        solver_state['hi_costs'] = solver_state['hi_costs'] + p_hi_cost
 
         # Dual iterations
         if self.dist_weights_predictor is not None:
@@ -219,15 +239,14 @@ class PrimalPerturbationBlock(torch.nn.Module):
         solver_state = sol_utils.dual_iterations(solvers, solver_state, dist_weights, num_dual_iterations, omega, dual_improvement_slope, grad_dual_itr_max_itr)
         solver_state = sol_utils.distribute_delta(solvers, solver_state)
 
-        var_lp_f[:, 0] = normalized_net_primal_cost
         edge_rest_lp_f[:, 2] = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
+        con_lp_f[:, 0] = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state, True) # Update perturbed lower bound.
+
         # Update per BDD solution:
         with torch.no_grad(): #TODO: use black-box backprop?
-            new_lb = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state)
-            con_lp_f[:, 0] = new_lb # Need backprop through lb ?
             edge_rest_lp_f[:, 0] = sol_utils.compute_per_bdd_solution(solvers, solver_state)
        
-        return solver_state, var_lp_f, con_lp_f, edge_rest_lp_f
+        return solver_state, var_lp_f, con_lp_f, edge_rest_lp_f, norms
 
 class DualDistWeightsBlock(torch.nn.Module):
     def __init__(self, num_var_lp_f, num_con_lp_f, num_edge_lp_f, depth, var_dim, con_dim, edge_dim, use_layer_norm = False, predict_omega = False, skip_connections = False):
@@ -251,7 +270,7 @@ class DualDistWeightsBlock(torch.nn.Module):
     def forward(self, solvers, var_lp_f, con_lp_f, 
                 solver_state, edge_rest_lp_f, 
                 var_learned_f, con_learned_f, edge_learned_f, 
-                omega, edge_index_var_con, #TODOAA: Learn omega?
+                omega, edge_index_var_con,
                 num_dual_iterations, grad_dual_itr_max_itr, dual_improvement_slope, valid_edge_mask, batch_index_edge):
         for d in range(len(self.feature_refinement)):
             var_learned_f, con_learned_f, edge_learned_f = self.feature_refinement[d](
@@ -263,21 +282,20 @@ class DualDistWeightsBlock(torch.nn.Module):
             torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_rest_lp_f), 1), 
             edge_index_var_con) #+ 1e-6
         dist_weights = predictions[:, 0]
-        if self.predict_omega:
-            omega = torch.sigmoid(scatter_mean(predictions[:, 1], batch_index_edge))
-
-        #print(f'Predicted dist_weights, min: {dist_weights[valid_edge_mask].min()}, max: {dist_weights[valid_edge_mask].max()}')
-
-        # Project dist_weights to simplex:
-        #dist_weights = sol_utils.normalize_distribution_weights(dist_weights, edge_index_var_con)
         dist_weights = sol_utils.normalize_distribution_weights_softmax(dist_weights, edge_index_var_con)
         try:
             assert(torch.all(torch.isfinite(dist_weights)))
         except:
             breakpoint()
 
-        # Dual iterations
-        solver_state = sol_utils.dual_iterations(solvers, solver_state, dist_weights, num_dual_iterations, omega, dual_improvement_slope, grad_dual_itr_max_itr)
+        if self.predict_omega:
+            omega_vec = torch.sigmoid(predictions[:, 1])
+            # Dual iterations
+            solver_state = sol_utils.dual_iterations(solvers, solver_state, dist_weights, num_dual_iterations, omega_vec, dual_improvement_slope, grad_dual_itr_max_itr)
+        else:
+            omega_vec = None
+            # Dual iterations
+            solver_state = sol_utils.dual_iterations(solvers, solver_state, dist_weights, num_dual_iterations, omega, dual_improvement_slope, grad_dual_itr_max_itr)
 
         edge_rest_lp_f[:, 2] = dist_weights
         con_lp_f[:, 0] = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state)
@@ -285,7 +303,7 @@ class DualDistWeightsBlock(torch.nn.Module):
         with torch.no_grad(): #TODO: use black-box backprop?
             edge_rest_lp_f[:, 0] = sol_utils.compute_per_bdd_solution(solvers, solver_state)
        
-        return solver_state, var_lp_f, con_lp_f, edge_rest_lp_f, dist_weights
+        return solver_state, var_lp_f, con_lp_f, edge_rest_lp_f, dist_weights, omega_vec
 
 class DualFullCoordinateAscent(torch.nn.Module):
     def __init__(self, num_var_lp_f, num_con_lp_f, num_edge_lp_f, depth, var_dim, con_dim, edge_dim, use_layer_norm = False, skip_connections = False):

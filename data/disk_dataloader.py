@@ -31,7 +31,7 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
     def process_custom(self):
         self.file_list = []
         for path, subdirs, files in os.walk(self.data_root_dir):
-            for instance_name in files:
+            for instance_name in sorted(files):
                 if not instance_name.endswith('.lp') or 'nan' in instance_name or 'normalized' in instance_name:
                     continue
 

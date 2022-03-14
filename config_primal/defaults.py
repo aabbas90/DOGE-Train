@@ -1,4 +1,26 @@
 from yacs.config import CfgNode as CN
+import os
+
+def get_all_lp_instances(root_dir, data_name, keyword = None):
+    datasets = [data_name]
+    files_to_load = []
+    for path, subdirs, files in os.walk(root_dir):
+        for instance_name in sorted(files):
+            if not instance_name.endswith('.lp') or 'nan' in instance_name or 'normalized' in instance_name:
+                continue
+
+            if keyword is not None and not keyword in instance_name:
+                continue
+
+            files_to_load.append(instance_name)
+
+    all_params = {}
+    all_params[data_name + '_PARAMS'] = CN({
+            'root_dir': root_dir, 
+            'files_to_load': files_to_load,
+            'read_dual_converged' : True,
+            'need_gt': False})
+    return datasets, all_params
 
 cfg = CN()
 cfg.DEVICE = 'gpu'
@@ -13,12 +35,10 @@ cfg.MODEL.CKPT_PATH = None
 cfg.MODEL.OMEGA = 0.5
 cfg.MODEL.USE_LAYER_NORM = False
 cfg.MODEL.PREDICT_DIST_WEIGHTS = False
-cfg.MODEL.VAR_LP_FEATURES = ['normalized_perturbed_obj', 'deg']
-cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'def_mm', 'sol', 'coeff', 'new_mm_diff', 'orig_mm_diff']
+cfg.MODEL.VAR_LP_FEATURES = ['orig_obj', 'deg']
+cfg.MODEL.CON_LP_FEATURES = ['new_lb', 'orig_lb', 'rhs', 'con_type', 'deg']
+cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'sol', 'coeff', 'new_mm_diff', 'orig_mm_diff']
 
-# Caution: below mentioned features are strictly necessary, more features
-# can be added but none should be removed from these. 
 cfg.DATA = CN()
 
 # Number of workers for data loader
@@ -27,21 +47,21 @@ cfg.DATA.NUM_WORKERS = 4
 
 # All datasets to be used in an experiment (training and testing):
 # cfg.DATA.DATASETS = ['CT_SMALL', 'CT_LARGE'] # Underlying instances are of same size.
-# cfg.DATA.TEST_FRACTION = [1.0, 0.0]
+# cfg.DATA.VAL_FRACTION = [1.0, 0.0]
 
 # cfg.DATA.CT_SMALL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/small/', 'read_dual_converged' : True}) 
 # cfg.DATA.CT_LARGE_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/large/', 'read_dual_converged' : True}) 
 
 # cfg.DATA.DATASETS = ['CT_LARGE', 'CT_SMALL'] #, 'GM_HOTEL', 'GM_HOUSE'] #, 'GM_WORMS_TRAIN', 'GM_WORMS_TEST']
-# cfg.DATA.TEST_FRACTION = [0.0, 0.0] #, 0.0, 1.0]
-cfg.DATA.DATASETS = ['GM_HOTEL', 'GM_HOUSE'] #, 'GM_WORMS_TRAIN', 'GM_WORMS_TEST']
-cfg.DATA.TEST_FRACTION = [0.0, 0.0] #, 0.0, 1.0]
-cfg.DATA.CT_SMALL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/small', 'read_dual_converged' : True}) 
-cfg.DATA.CT_LARGE_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/large', 'read_dual_converged' : True}) 
-cfg.DATA.GM_HOTEL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/hotel_house/hotel/', 'read_dual_converged' : True}) 
-cfg.DATA.GM_HOUSE_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/hotel_house/house/', 'read_dual_converged' : True}) 
-cfg.DATA.GM_WORMS_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/train_split/', 'read_dual_converged' : True}) 
-cfg.DATA.GM_WORMS_TEST_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/test_split/', 'read_dual_converged' : True}) 
+# cfg.DATA.VAL_FRACTION = [0.0, 0.0] #, 0.0, 1.0]
+# cfg.DATA.DATASETS = ['GM_HOTEL', 'GM_HOUSE'] #, 'GM_WORMS_TRAIN', 'GM_WORMS_TEST']
+# cfg.DATA.VAL_FRACTION = [0.0, 0.0] #, 0.0, 1.0]
+# cfg.DATA.CT_SMALL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/small', 'read_dual_converged' : True}) 
+# cfg.DATA.CT_LARGE_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/large', 'read_dual_converged' : True}) 
+# cfg.DATA.GM_HOTEL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/hotel_house/hotel/', 'read_dual_converged' : True}) 
+# cfg.DATA.GM_HOUSE_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/hotel_house/house/', 'read_dual_converged' : True}) 
+# cfg.DATA.GM_WORMS_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/train_split/', 'read_dual_converged' : True}) 
+# cfg.DATA.GM_WORMS_TEST_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/test_split/', 'read_dual_converged' : True}) 
 
 cfg.LOG_EVERY = 20
 cfg.TRAIN = CN()
@@ -59,13 +79,17 @@ cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE = 1e-6
 cfg.TRAIN.LOSS_DISCOUNT_FACTOR = 1.0
 cfg.TRAIN.LOSS_MARGIN = 5e-3
 cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 25
+cfg.TRAIN.MIN_PERTURBATION = 1e-2
 
 cfg.TEST = CN()
 cfg.TEST.NUM_DUAL_ITERATIONS = 200
 cfg.TEST.NUM_ROUNDS = 20 # How many times rounding iterations.
 cfg.TEST.DUAL_IMPROVEMENT_SLOPE = 1e-6
-cfg.TEST.BATCH_SIZE = 1
+cfg.TEST.VAL_BATCH_SIZE = 1
 cfg.TEST.PERIOD = 50 # Validate after every n epoch (can be less than 1).
+
+cfg.TEST.DATA = CN() # Stores dataset params used for testing only.
+
 cfg.SEED = 1
 cfg.OUTPUT_ROOT_DIR = '/home/ahabbas/projects/LearnDBCA/out_primal/' # Do not change, if changed exclude it from sbatch files from copying.
 cfg.OUT_REL_DIR = 'CT/v3_test/'
