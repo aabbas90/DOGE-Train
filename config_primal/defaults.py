@@ -36,8 +36,11 @@ cfg.MODEL.OMEGA = 0.5
 cfg.MODEL.USE_LAYER_NORM = False
 cfg.MODEL.PREDICT_DIST_WEIGHTS = False
 cfg.MODEL.VAR_LP_FEATURES = ['orig_obj', 'deg']
+cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg']
 cfg.MODEL.CON_LP_FEATURES = ['new_lb', 'orig_lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'sol', 'coeff', 'new_mm_diff', 'orig_mm_diff']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'lb', 'rhs', 'con_type', 'deg']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'coeff', 'new_mm_diff', 'orig_mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'coeff', 'mm_diff', 'mm_diff']
 
 cfg.DATA = CN()
 

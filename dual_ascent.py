@@ -23,9 +23,12 @@ class DualAscentBDD(LightningModule):
                 loss_discount_factor:float,
                 loss_margin: float,
                 omega_initial: float,
-                var_lp_features: List[str],  # obj, deg
-                con_lp_features: List[str],  # BDD lb, rhs, con type, degree
-                edge_lp_features: List[str],  # lo cost, hi cost, mm diff, bdd sol, con coeff, prev dist weights
+                var_lp_features: List[str],
+                con_lp_features: List[str],
+                edge_lp_features: List[str],
+                var_lp_features_init: List[str],
+                con_lp_features_init: List[str],
+                edge_lp_features_init: List[str],
                 num_learned_var_f: int, 
                 num_learned_con_f: int, 
                 num_learned_edge_f: int,
@@ -60,6 +63,9 @@ class DualAscentBDD(LightningModule):
                 'var_lp_features',
                 'con_lp_features',
                 'edge_lp_features',
+                'var_lp_features_init',
+                'con_lp_features_init',
+                'edge_lp_features_init',
                 'num_learned_var_f', 
                 'num_learned_con_f', 
                 'num_learned_edge_f',
@@ -82,9 +88,9 @@ class DualAscentBDD(LightningModule):
 
         if not full_coordinate_ascent:
             self.dual_block = DualDistWeightsBlock(
-                            num_var_lp_f = len(var_lp_features),
-                            num_con_lp_f = len(con_lp_features), 
-                            num_edge_lp_f = len(edge_lp_features),
+                            var_lp_f_names = var_lp_features,
+                            con_lp_f_names = con_lp_features, 
+                            edge_lp_f_names = edge_lp_features,
                             depth = dual_predictor_depth,
                             var_dim = num_learned_var_f, 
                             con_dim = num_learned_con_f,
@@ -94,9 +100,9 @@ class DualAscentBDD(LightningModule):
                             skip_connections = skip_connections)
         else:
             self.dual_block = DualFullCoordinateAscent(
-                            num_var_lp_f = len(var_lp_features),
-                            num_con_lp_f = len(con_lp_features), 
-                            num_edge_lp_f = len(edge_lp_features),
+                            var_lp_f_names = var_lp_features,
+                            con_lp_f_names = con_lp_features, 
+                            edge_lp_f_names = edge_lp_features,
                             depth = dual_predictor_depth,
                             var_dim = num_learned_var_f, 
                             con_dim = num_learned_con_f,
@@ -131,6 +137,9 @@ class DualAscentBDD(LightningModule):
             var_lp_features = cfg.MODEL.VAR_LP_FEATURES,
             con_lp_features = cfg.MODEL.CON_LP_FEATURES,
             edge_lp_features = cfg.MODEL.EDGE_LP_FEATURES,
+            var_lp_features_init = cfg.MODEL.VAR_LP_FEATURES_INIT,
+            con_lp_features_init = cfg.MODEL.CON_LP_FEATURES_INIT,
+            edge_lp_features_init = cfg.MODEL.EDGE_LP_FEATURES_INIT,
             num_dual_iter_train = cfg.TRAIN.NUM_DUAL_ITERATIONS,
             num_dual_iter_test = num_dual_iter_test,
             use_layer_norm = cfg.MODEL.USE_LAYER_NORM,
@@ -163,38 +172,8 @@ class DualAscentBDD(LightningModule):
             raise ValueError(f'Optimizer {self.hparams.optimizer_name} not exposed.')
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
-        batch.edge_index_var_con = batch.edge_index_var_con.to(device)
-        batch.batch_index_con = batch.rhs_vector_batch.to(device) # con batch assignment
-        batch.batch_index_edge = batch.edge_index_var_con_batch.to(device) # edge batch assignment
-        batch.omega = torch.tensor([self.hparams.omega_initial], device = device)
-        solvers, solver_state, per_bdd_sol, per_bdd_lb, dist_weights, valid_edge_mask, gt_sol_edge, gt_sol_var, initial_lbs = sol_utils.init_solver_and_get_states(
-            batch, device, 'lp_stats', 0, 1.0, batch.omega)
-        batch.valid_edge_mask = valid_edge_mask
-        batch.gt_sol_edge = gt_sol_edge
-        batch.gt_sol_var = gt_sol_var
-        batch.initial_lbs = initial_lbs
-
-        # Variable LP features:
-        var_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[0])
-        var_degree[torch.cumsum(batch.num_vars, 0) - 1] = 0 # Terminal nodes, not corresponding to any primal variable.
-        batch.var_lp_f = torch.stack((batch.objective.to(device), var_degree), 1) # Obj, Deg.
-        batch.objective = None
-
-        # Constraint LP features:
-        con_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[1])
-        batch.con_lp_f = torch.stack((per_bdd_lb, batch.rhs_vector.to(device), batch.con_type.to(device), con_degree), 1) # BDD lb, rhs, con type, degree
-        batch.rhs_vector = None
-        batch.con_type = None
-
-        # Edge LP features:
-        if not self.hparams.full_coordinate_ascent:
-            batch.edge_rest_lp_f = torch.stack((per_bdd_sol, batch.con_coeff.to(device), dist_weights), 1) #TODOAA: Compute moving average of previous dist weights as features?
-        else:
-            mm_diff = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
-            batch.edge_rest_lp_f = torch.stack((per_bdd_sol, batch.con_coeff.to(device), dist_weights, mm_diff), 1)
-
-        batch.solver_state = solver_state
-        batch.solvers = solvers
+        batch, _ = sol_utils.init_solver_and_get_states(batch, device, 'lp_stats',
+                    self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init, 0, 1.0, self.hparams.omega_initial)
         return batch
 
     def compute_training_start_round(self):

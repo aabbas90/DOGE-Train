@@ -37,13 +37,14 @@ cfg.MODEL.DUAL_PRED_DEPTH = 1
 cfg.MODEL.CKPT_PATH = None
 cfg.MODEL.OMEGA_INITIAL = 0.5
 cfg.MODEL.USE_LAYER_NORM = True
-cfg.MODEL.VAR_LP_FEATURES = ['obj', 'deg']
-cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'def_mm', 'sol', 'coeff', 'prev_dist_weights']
-# Calculate overall distribution weights from 'lo_costs', 'hi_costs' (def_mm = 0) and keep history?
 
-# Caution: below mentioned features are strictly necessary, more features
-# can be added but none should be removed from these. 
+cfg.MODEL.VAR_LP_FEATURES = ['obj', 'deg']
+cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg']
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'coeff', 'prev_dist_weights']
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'coeff', 'dist_weights']
+
 cfg.DATA = CN()
 
 # Number of workers for data loader

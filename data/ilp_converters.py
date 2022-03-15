@@ -44,7 +44,7 @@ def create_normalized_bdd_instance(ilp_path):
         var_names.append(var.VarName) 
 
     # Scale the objective vector to [-1, 1]. (This will change the predicted objective value).
-    obj_multiplier = obj_multiplier / np.abs(np.array(objs)).max()
+    obj_multiplier = obj_multiplier / (1e-6 + np.abs(np.array(objs)).max())
     for i in range(len(objs)):
         ilp_bdd.add_new_variable_with_obj(var_names[i], obj_multiplier * float(objs[i]))
 
@@ -86,12 +86,8 @@ def map_solution_order(solution_dict, bdd_ilp_instance):
 def create_bdd_repr_from_ilp(ilp_path, gt_info, load_constraint_coeffs = False):
     bdd_ilp_instance, obj_multiplier, obj_offset = create_normalized_bdd_instance(ilp_path)
 
-    solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance)
-    assert solver.nr_primal_variables() == bdd_ilp_instance.nr_variables(), f'Found {solver.nr_primal_variables()} variables in solver and {bdd_ilp_instance.nr_variables()} in ILP read by BDD solver.'
-    assert solver.nr_bdds() == bdd_ilp_instance.nr_constraints(), f'Found {solver.nr_bdds()} BDDs in solver and {bdd_ilp_instance.nr_constraints()} constraints in ILP {ilp_path} read by BDD solver.'
-    
+    solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs)
     num_vars = solver.nr_primal_variables() + 1 # +1 due to terminal node.
-
     num_cons = solver.nr_bdds()
     num_layers = solver.nr_layers()
     var_indices = torch.empty((solver.nr_layers()), dtype = torch.int32, device = 'cuda')
@@ -100,20 +96,24 @@ def create_bdd_repr_from_ilp(ilp_path, gt_info, load_constraint_coeffs = False):
     solver.bdd_index(con_indices.data_ptr())
     var_indices = var_indices.cpu().numpy()
     con_indices = con_indices.cpu().numpy()
-    objective = np.concatenate((bdd_ilp_instance.objective(), [0]))
+
+    num_extra_vars_decomp = solver.nr_primal_variables() - bdd_ilp_instance.nr_variables()
+    objective = np.concatenate((bdd_ilp_instance.objective(), [0] * num_extra_vars_decomp, [0])) # Decomposition variables can be present with obj 0.
     # Map gt solution variables indices according to BDD variable order:
     for stat in ['lp_stats', 'ilp_stats']:
         if stat in gt_info and gt_info[stat]['sol_dict'] is not None:
             assert(len(gt_info[stat]['sol_dict']) == bdd_ilp_instance.nr_variables())
             gt_info[stat]['sol'] = map_solution_order(gt_info[stat]['sol_dict'], bdd_ilp_instance)
             gt_obj = gt_info[stat]['obj']
-            computed_obj = np.sum(gt_info[stat]['sol'] * objective[:-1]) / obj_multiplier + obj_offset
+            computed_obj = np.sum(gt_info[stat]['sol'] * objective[:bdd_ilp_instance.nr_variables()]) / obj_multiplier + obj_offset
             assert np.abs(computed_obj - gt_obj) < 1e-3, f'GT objectives mismatch for {ilp_path}. GT obj: {gt_obj}, Computed obj: {computed_obj}.'
 
     assert(objective.shape[0] == num_vars)
 
     if load_constraint_coeffs:
     # Encode constraints as features assuming that constraints are linear:
+        assert solver.nr_primal_variables() == bdd_ilp_instance.nr_variables(), f'Found {solver.nr_primal_variables()} variables in solver and {bdd_ilp_instance.nr_variables()} in ILP read by BDD solver.'
+        assert solver.nr_bdds() == bdd_ilp_instance.nr_constraints(), f'Found {solver.nr_bdds()} BDDs in solver and {bdd_ilp_instance.nr_constraints()} constraints in ILP {ilp_path} read by BDD solver.'
         try:
             coefficients = solver.constraint_matrix_coeffs(bdd_ilp_instance)
         except:
@@ -143,9 +143,9 @@ def create_bdd_repr_from_ilp(ilp_path, gt_info, load_constraint_coeffs = False):
         rhs_vector = rhs_vector.numpy()
         leq_type = leq_type.numpy()
     else:
-        rhs_vector = None
-        coefficients = None
-        leq_type = None
+        rhs_vector = np.zeros((num_cons)) # To create batch index for constraint nodes.
+        coefficients = np.zeros((num_layers))
+        leq_type = np.zeros((num_cons))
     bdd_repr = {
                     "solver_data": pickle.dumps(solver, -1), # bytes representation of bdd cuda solver internal variables.
                     "num_vars": num_vars, "num_cons": num_cons, "num_layers": num_layers,

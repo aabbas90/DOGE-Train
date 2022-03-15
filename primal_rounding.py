@@ -23,9 +23,12 @@ class PrimalRoundingBDD(LightningModule):
                 loss_margin: float,
                 min_perturbation: float,
                 omega: float,
-                var_lp_features: List[str],  # orig_obj, deg, obj pert
-                con_lp_features: List[str],  # BDD lb, rhs, con type, degree
-                edge_lp_features: List[str],  # lo cost, hi cost, mm diff, bdd sol, con coeff
+                var_lp_features: List[str],
+                con_lp_features: List[str],
+                edge_lp_features: List[str],               
+                var_lp_features_init: List[str],
+                con_lp_features_init: List[str],
+                edge_lp_features_init: List[str],
                 num_learned_var_f: int, 
                 num_learned_con_f: int, 
                 num_learned_edge_f: int,
@@ -61,6 +64,9 @@ class PrimalRoundingBDD(LightningModule):
                 'var_lp_features',
                 'con_lp_features',
                 'edge_lp_features',
+                'var_lp_features_init',
+                'con_lp_features_init',
+                'edge_lp_features_init',
                 'num_learned_var_f', 
                 'num_learned_con_f', 
                 'num_learned_edge_f',
@@ -82,9 +88,9 @@ class PrimalRoundingBDD(LightningModule):
                         depth = feature_extractor_depth, use_layer_norm = use_layer_norm, use_def_mm = False)
 
         self.primal_block = PrimalPerturbationBlock(
-                        num_var_lp_f = len(var_lp_features),
-                        num_con_lp_f = len(con_lp_features), 
-                        num_edge_lp_f = len(edge_lp_features),
+                        var_lp_f_names = var_lp_features,
+                        con_lp_f_names = con_lp_features, 
+                        edge_lp_f_names = edge_lp_features,
                         depth = primal_predictor_depth,
                         var_dim = num_learned_var_f, 
                         con_dim = num_learned_con_f,
@@ -124,6 +130,9 @@ class PrimalRoundingBDD(LightningModule):
             var_lp_features = cfg.MODEL.VAR_LP_FEATURES,
             con_lp_features = cfg.MODEL.CON_LP_FEATURES,
             edge_lp_features = cfg.MODEL.EDGE_LP_FEATURES,
+            var_lp_features_init = cfg.MODEL.VAR_LP_FEATURES_INIT,
+            con_lp_features_init = cfg.MODEL.CON_LP_FEATURES_INIT,
+            edge_lp_features_init = cfg.MODEL.EDGE_LP_FEATURES_INIT,
             num_dual_iter_train = cfg.TRAIN.NUM_DUAL_ITERATIONS,
             num_dual_iter_test = num_dual_iter_test,
             dual_improvement_slope_train = cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE,
@@ -157,49 +166,12 @@ class PrimalRoundingBDD(LightningModule):
             raise ValueError(f'Optimizer {self.hparams.optimizer_name} not exposed.')
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
-        batch.edge_index_var_con = batch.edge_index_var_con.to(device) 
-        batch.batch_index_var = batch.objective_batch.to(device) # var batch assignment
-        batch.batch_index_con = batch.rhs_vector_batch.to(device) # con batch assignment
-        batch.batch_index_edge = batch.edge_index_var_con_batch.to(device) # edge batch assignment
-        batch.omega = torch.tensor([self.hparams.omega], device = device)
-        solvers, solver_state, per_bdd_sol, per_bdd_lb, dist_weights, valid_edge_mask, gt_sol_edge, gt_sol_var, initial_lbs = sol_utils.init_solver_and_get_states(
-            batch, device, 'ilp_stats', 0, 1.0, batch.omega, distribute_delta=True)
-        
-        batch.initial_lbs = initial_lbs
-        batch.valid_edge_mask = valid_edge_mask
-        batch.gt_sol_edge = gt_sol_edge
-        batch.gt_sol_var = gt_sol_var
-        all_mm_diff = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
-        try:
-            assert(torch.all(torch.isfinite(solver_state['lo_costs'])))
-            assert(torch.all(torch.isfinite(solver_state['hi_costs'])))
-            assert(torch.all(torch.isfinite(solver_state['def_mm'])))
-            assert(torch.all(torch.isfinite(all_mm_diff)))
-        except:
-            breakpoint()
-
+        batch, dist_weights = sol_utils.init_solver_and_get_states(batch, device, 'ilp_stats', 
+                                self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init,
+                                0, 1.0, self.hparams.omega, distribute_delta=True)
+ 
         batch.dist_weights = dist_weights # Isotropic weights.
-        batch.norms = torch.ones((len(solvers)), device = device)
-        # solver_state, per_bdd_lb, all_mm_diff, batch.norms = sol_utils.normalize_costs(solver_state, per_bdd_lb, all_mm_diff, batch.norms, batch.batch_index_edge, batch.batch_index_con)
-
-        # Variable LP features:
-        # normalized_objective, _ = sol_utils.normalize_objective_batch(batch.objective.to(device), batch.batch_index_var)
-        var_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[0])
-        var_degree[torch.cumsum(batch.num_vars, 0) - 1] = 0 # Terminal nodes, not corresponding to any primal variable.
-        obj = batch.objective.to(device)
-        batch.var_lp_f = torch.stack((obj, var_degree), 1) # orig_objective, deg
-
-        # Constraint LP features:
-        con_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[1])
-        batch.con_lp_f = torch.stack((per_bdd_lb, per_bdd_lb, batch.rhs_vector.to(device), batch.con_type.to(device), con_degree), 1) # BDD lb, rhs, con type, degree
-        batch.rhs_vector = None
-        batch.con_type = None
-
-        # Edge LP features:
-        batch.edge_rest_lp_f = torch.stack((per_bdd_sol, batch.con_coeff.to(device), all_mm_diff, all_mm_diff), 1)
-        batch.solver_state = solver_state
-
-        batch.solvers = solvers
+        batch.norms = torch.ones((len(batch.solvers)), device = device)
         return batch
 
     def compute_training_start_round(self):

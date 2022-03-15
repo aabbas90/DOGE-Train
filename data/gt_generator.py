@@ -11,7 +11,7 @@ def get_solution(model):
         obj_value += var.X * var.Obj # Does not account constant term in objective vector same as BDD solver.
     return solution, obj_value
 
-def generate_gt_gurobi(ilp_path):
+def generate_gt_gurobi(ilp_path, need_ilp_gt = True):
     """Generate the following using gurobi:
     1. LP relaxation solution, objective and time need to produce it.
     2. original ILP solution, objective and time need to produce it. """
@@ -27,11 +27,13 @@ def generate_gt_gurobi(ilp_path):
     lp_relaxation_time = time.time() - start_time
     lp_solution, lp_obj_value = get_solution(lp_relaxation)
     lp_stats = {'time': lp_relaxation_time, 'obj': lp_obj_value + lp_relaxation.ObjCon, 'sol_dict': lp_solution}
-    start_time = time.time()
-    ilp_gurobi.optimize()
-    ilp_time = time.time() - start_time
-    ilp_solution, ilp_obj_value = get_solution(ilp_gurobi)
-    ilp_stats = {'time': ilp_time, 'obj': ilp_obj_value + ilp_gurobi.ObjCon, 'sol_dict': ilp_solution}
+    ilp_stats = None
+    if need_ilp_gt:
+        start_time = time.time()
+        ilp_gurobi.optimize()
+        ilp_time = time.time() - start_time
+        ilp_solution, ilp_obj_value = get_solution(ilp_gurobi)
+        ilp_stats = {'time': ilp_time, 'obj': ilp_obj_value + ilp_gurobi.ObjCon, 'sol_dict': ilp_solution}
     return lp_stats, ilp_stats
 
 

@@ -4,7 +4,7 @@ from config_dual.defaults import get_cfg_defaults
 cfg = get_cfg_defaults()
 
 cfg.MODEL.FULL_COORDINATE_ASCENT = True
-cfg.MODEL.EDGE_LP_FEATURES = ['lo_costs', 'hi_costs', 'def_mm', 'sol', 'coeff', 'prev_dist_weights', 'prev_mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'coeff', 'prev_dist_weights', 'prev_mm_diff']
 
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['GM_WORMS_TRAIN', 'GM_WORMS_TEST']

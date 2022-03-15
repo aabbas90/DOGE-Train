@@ -1,12 +1,24 @@
 import torch
 import pickle
-import BDD.bdd_cuda_learned_mma_py as bdd_solver
-from torch_scatter import scatter_sum, scatter_softmax, scatter_mean
+from torch_scatter import scatter_sum, scatter_softmax, scatter_mean, scatter_add
 import bdd_cuda_torch
 import numpy as np
 
-def init_solver_and_get_states(batch, device, gt_solution_type, num_iterations = 0, improvement_slope = 1e-6, omega = 0.5, distribute_delta = False):
+def set_features(f_name, feature_names_to_use, feature_tensor, feature_vector):
+    for (i, name) in enumerate(feature_names_to_use):
+        if f_name == name:
+            feature_tensor[:, i] = feature_vector
+            print(f'Setting feature: {f_name} to index: {i}')
+    return feature_tensor
+
+def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, con_lp_f_names, edge_lp_f_names, 
+                            num_iterations = 0, improvement_slope = 1e-6, omega = 0.5, distribute_delta = False):
+    batch.edge_index_var_con = batch.edge_index_var_con.to(device) 
+    batch.batch_index_var = batch.objective_batch.to(device) # var batch assignment
+    batch.batch_index_con = batch.rhs_vector_batch.to(device) # con batch assignment
+    batch.batch_index_edge = batch.edge_index_var_con_batch.to(device) # edge batch assignment
     num_edges = batch.edge_index_var_con.shape[1]
+    batch.omega = torch.tensor([omega], device = device)
     lo_costs_out = torch.empty((num_edges), device = device, dtype = torch.float32)
     hi_costs_out = torch.empty_like(lo_costs_out)
     def_mm_out = torch.empty_like(lo_costs_out)
@@ -38,7 +50,43 @@ def init_solver_and_get_states(batch, device, gt_solution_type, num_iterations =
         gt_sol_var = None
         gt_sol_edge = None
     valid_edge_mask = torch.cat(valid_edge_mask_list, 0)
-    return solvers, solver_state, per_bdd_sol, per_bdd_lb, dist_weights, valid_edge_mask, gt_sol_edge, gt_sol_var, initial_lbs
+    batch.valid_edge_mask = valid_edge_mask
+    batch.gt_sol_edge = gt_sol_edge
+    batch.gt_sol_var = gt_sol_var
+    batch.initial_lbs = initial_lbs
+    batch.solver_state = solver_state
+    batch.solvers = solvers
+    mm_diff = compute_all_min_marginal_diff(solvers, solver_state)
+    try:
+        assert(torch.all(torch.isfinite(solver_state['lo_costs'])))
+        assert(torch.all(torch.isfinite(solver_state['hi_costs'])))
+        assert(torch.all(torch.isfinite(solver_state['def_mm'])))
+        assert(torch.all(torch.isfinite(mm_diff)))
+    except:
+        breakpoint()
+
+    # Variable LP features:
+    var_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[0])
+    var_degree[torch.cumsum(batch.num_vars, 0) - 1] = 0 # Terminal nodes, not corresponding to any primal variable.
+    batch.var_lp_f = torch.empty((torch.numel(batch.objective), len(var_lp_f_names)), device = device, dtype = torch.float32)
+    batch.var_lp_f = set_features('obj', var_lp_f_names, batch.var_lp_f, batch.objective.to(device))
+    batch.var_lp_f = set_features('deg', var_lp_f_names, batch.var_lp_f, var_degree)
+
+    # Constraint LP features:
+    con_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[1])
+    batch.con_lp_f = torch.empty((torch.numel(con_degree), len(con_lp_f_names)), device = device, dtype = torch.float32)
+    batch.con_lp_f = set_features('deg', con_lp_f_names, batch.con_lp_f, con_degree)
+    batch.con_lp_f = set_features('rhs', con_lp_f_names, batch.con_lp_f, batch.rhs_vector.to(device))
+    batch.con_lp_f = set_features('lb', con_lp_f_names, batch.con_lp_f, per_bdd_lb)
+    batch.con_lp_f = set_features('con_type', con_lp_f_names, batch.con_lp_f, batch.con_type.to(device))
+
+    # Edge LP features:
+    batch.edge_rest_lp_f = torch.empty((torch.numel(dist_weights), len(edge_lp_f_names)), device = device, dtype = torch.float32)
+    batch.edge_rest_lp_f = set_features('sol', edge_lp_f_names, batch.edge_rest_lp_f, per_bdd_sol)
+    batch.edge_rest_lp_f = set_features('dist_weights', edge_lp_f_names, batch.edge_rest_lp_f, dist_weights)
+    batch.edge_rest_lp_f = set_features('mm_diff', edge_lp_f_names, batch.edge_rest_lp_f, mm_diff)
+    batch.edge_rest_lp_f = set_features('coeff', edge_lp_f_names, batch.edge_rest_lp_f, batch.con_coeff.to(device))
+    return batch, dist_weights
 
 def normalize_costs(solver_state, per_bdd_lb, mm_diff, norms, batch_index_edge, batch_index_con):
     cur_norm = scatter_sum(torch.square(solver_state['lo_costs']) + torch.square(solver_state['hi_costs']), batch_index_edge)

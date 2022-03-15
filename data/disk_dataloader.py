@@ -5,28 +5,36 @@ from data.ilp_converters import create_bdd_repr_from_ilp, create_graph_from_bdd_
 from data.gt_generator import generate_gt_gurobi
 
 class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
-    def __init__(self, data_root_dir, files_to_load, read_dual_converged, need_gt):
+    def __init__(self, data_root_dir, files_to_load, read_dual_converged, need_gt, need_ilp_gt, need_bdd_constraint_features):
         super().__init__(root=None, transform=None, pre_transform=None)
         self.data_root_dir = data_root_dir
         self.files_to_load = files_to_load
         self.read_dual_converged = read_dual_converged
         self.need_gt = need_gt
+        self.need_ilp_gt = need_ilp_gt
+        self.need_bdd_constraint_features = need_bdd_constraint_features
         self.process_custom()
 
     @classmethod
-    def from_config(cls, cfg, data_name):
+    def from_config(cls, cfg, data_name, con_features):
         params = cfg.DATA[data_name + '_PARAMS']
         data_root_dir = params.root_dir
         files_to_load = params.files_to_load
         read_dual_converged = params.read_dual_converged
         need_gt = True
+        need_ilp_gt = True
+        need_bdd_constraint_features = 'con_type' in con_features
         if 'need_gt' in params:
             need_gt = params.need_gt
+        if 'need_ilp_gt' in params:
+            need_ilp_gt = params.need_ilp_gt
         return cls(
             data_root_dir = data_root_dir,
             files_to_load = files_to_load,
             read_dual_converged = read_dual_converged,
-            need_gt = need_gt)
+            need_gt = need_gt,
+            need_ilp_gt = need_ilp_gt,
+            need_bdd_constraint_features = need_bdd_constraint_features)
 
     def process_custom(self):
         self.file_list = []
@@ -43,12 +51,15 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                                         instance_name.replace('.lp', '.pkl'))
                 
                 if not os.path.exists(sol_path):
+                    empty_sol = {'time': None, 'obj': None, 'sol_dict': None, 'sol': None}
                     if self.need_gt:
-                        lp_stats, ilp_stats = generate_gt_gurobi(instance_path)
+                        lp_stats, ilp_stats = generate_gt_gurobi(instance_path, self.need_ilp_gt)
+                        if ilp_stats == None:
+                            ilp_stats = empty_sol
                         gt_info = {"lp_stats": lp_stats, "ilp_stats": ilp_stats}
+                        os.makedirs(os.path.dirname(sol_path), exist_ok = True)
                         pickle.dump(gt_info, open(sol_path, "wb"))
                     else:
-                        empty_sol = {'time': None, 'obj': None, 'sol_dict': None, 'sol': None}
                         gt_info = {"lp_stats": empty_sol, "ilp_stats": empty_sol}
                         pickle.dump(gt_info, open(sol_path, "wb"))
                 else:
@@ -58,7 +69,7 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                 bdd_repr_conv_path = instance_path.replace('.lp', '_bdd_repr_dual_converged.pkl')
 
                 if not os.path.exists(bdd_repr_path):
-                    bdd_repr, gt_info = create_bdd_repr_from_ilp(instance_path, gt_info)
+                    bdd_repr, gt_info = create_bdd_repr_from_ilp(instance_path, gt_info, self.need_bdd_constraint_features)
                     pickle.dump(bdd_repr, open(bdd_repr_path, "wb"))
                     pickle.dump(gt_info, open(sol_path, "wb"))
                 if self.read_dual_converged:
