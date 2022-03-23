@@ -33,14 +33,14 @@ cfg.MODEL.FEATURE_EXTRACTOR_DEPTH = 1
 cfg.MODEL.PRIMAL_PRED_DEPTH = 1
 cfg.MODEL.CKPT_PATH = None
 cfg.MODEL.OMEGA = 0.5
+cfg.MODEL.USE_LSTM_VAR = False
 cfg.MODEL.USE_LAYER_NORM = False
-cfg.MODEL.PREDICT_DIST_WEIGHTS = False
-cfg.MODEL.VAR_LP_FEATURES = ['orig_obj', 'deg']
-cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg']
-cfg.MODEL.CON_LP_FEATURES = ['new_lb', 'orig_lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'coeff', 'new_mm_diff', 'orig_mm_diff']
-cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'coeff', 'mm_diff', 'mm_diff']
+cfg.MODEL.VAR_LP_FEATURES = ['orig_obj', 'deg', 'prev_obj']
+cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg', 'obj']
+cfg.MODEL.CON_LP_FEATURES = ['prev_lb', 'orig_lb', 'rhs', 'con_type', 'deg', 'round_index']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'lb', 'rhs', 'con_type', 'deg', 'round_index']
+cfg.MODEL.EDGE_LP_FEATURES = ['prev_sol', 'orig_sol', 'coeff', 'prev_mm_diff', 'orig_mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'sol', 'coeff', 'mm_diff', 'mm_diff']
 
 cfg.DATA = CN()
 
@@ -68,7 +68,8 @@ cfg.DATA.NUM_WORKERS = 4
 
 cfg.LOG_EVERY = 20
 cfg.TRAIN = CN()
-cfg.TRAIN.BASE_LR = 1e-3
+cfg.TRAIN.BASE_LR = 1e-2
+cfg.TRAIN.LR_GAMMA = 0.1
 cfg.TRAIN.BATCH_SIZE = 8
 cfg.TRAIN.MAX_NUM_EPOCHS = 500
 cfg.TRAIN.OPTIMIZER = "Adam"

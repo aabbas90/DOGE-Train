@@ -9,7 +9,7 @@ import argparse
 
 def sample_ilp(ilp_gurobi, graph_nx, num_vars, num_cons, max_num_constraints, max_num_vars):
     restricted_ilp = ilp_gurobi.copy()
-    if num_cons > max_num_constraints and num_vars > max_num_vars:
+    if num_cons > max_num_constraints:
         starting_con = np.random.randint(num_vars, num_vars + num_cons)
         shortest_path_lengths = nx.shortest_path_length(graph_nx, source = starting_con)
         current_num_cons = 0
@@ -50,7 +50,7 @@ def sample_ilp(ilp_gurobi, graph_nx, num_vars, num_cons, max_num_constraints, ma
     restricted_ilp.update()
     print(f'current_num_vars: {current_num_vars}, current_num_cons: {current_num_cons}')
     print('picked vars. # {} / {}, picked cons. # {} / {}'.format(restricted_ilp.getAttr('NumVars'), num_vars, restricted_ilp.getAttr('NumConstrs'), num_cons))
-    return restricted_ilp
+    return restricted_ilp, restricted_ilp.getAttr('NumVars'), restricted_ilp.getAttr('NumConstrs')
 
 def decompose_ilp(ilp_path, out_dir, max_num_constraints, max_num_vars, max_nr_decomp):
     ilp_gurobi = gp.read(ilp_path)
@@ -65,15 +65,22 @@ def decompose_ilp(ilp_path, out_dir, max_num_constraints, max_num_vars, max_nr_d
     edge_indices[0, :] += num_vars
     edge_indices_undir = to_undirected(edge_indices)
     graph_nx = None
+    i = 0
     for d in range(nr_decompositions):
         lp_folder = os.path.join(out_dir, 'instances') 
-        lp_path = lp_folder + '/' + str(d) + '.lp'
+        lp_path = lp_folder + '/' + str(i) + '.lp'
         os.makedirs(lp_folder, exist_ok = True)
         if graph_nx is None:
             graph_nx = to_networkx(Data(edge_index=edge_indices_undir, num_nodes = num_vars + num_cons), to_undirected=True)
 
-        restricted_ilp = sample_ilp(ilp_gurobi, graph_nx, num_vars, num_cons, max_num_constraints, max_num_vars)
+        restricted_ilp, picked_num_vars, picked_num_cons = sample_ilp(ilp_gurobi, graph_nx, num_vars, num_cons, max_num_constraints, max_num_vars)
+        if restricted_ilp.getAttr('NumBinVars') != restricted_ilp.getAttr('NumVars'):
+            continue
+        if (picked_num_vars == 0 or picked_num_cons == 0 or picked_num_cons > max_num_constraints * 2 or picked_num_vars > 2 * max_num_vars):
+            print(f"Skipped writing {lp_path}")
+            continue
         restricted_ilp.write(lp_path)
+        i = i + 1
 
 def generate_ilps(root_dir, out_root_dir, max_num_constraints, max_num_vars, max_nr_decomp):
     file_list = []
@@ -100,4 +107,4 @@ root_dir = args.input_dir
 out_dir = args.output_dir
 print(f'root_dir: {root_dir}')
 print(f'out_dir: {out_dir}')
-generate_ilps(root_dir, out_dir, 5000, 25000, 50)
+generate_ilps(root_dir, out_dir, 2500, 5000, 50)

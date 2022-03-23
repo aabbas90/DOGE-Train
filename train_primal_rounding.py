@@ -6,7 +6,8 @@ warnings.filterwarnings("ignore", ".*does not have many workers.*")
 warnings.filterwarnings("ignore", ".*if you want to see logs for the training epoch.*")
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning import Trainer
 import torch
 torch.use_deterministic_algorithms(False)
 from config_primal.defaults import get_cfg_defaults
@@ -55,6 +56,8 @@ def main(args):
         ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR, cfg.MODEL.CKPT_PATH)
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
     checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.VAL_PERIOD)
+    lr_monitor = LearningRateMonitor(logging_interval='epoch')
+
     trainer = Trainer(deterministic=False,  # due to https://github.com/pyg-team/pytorch_geometric/issues/3175#issuecomment-1047886622
                     gpus = gpus,
                     max_epochs = cfg.TRAIN.MAX_NUM_EPOCHS, 
@@ -62,9 +65,10 @@ def main(args):
                     check_val_every_n_epoch = cfg.TEST.VAL_PERIOD,
                     logger = tb_logger, 
                     resume_from_checkpoint = ckpt_path,
-                    num_sanity_val_steps=0, 
+                    num_sanity_val_steps=-1,
                     log_every_n_steps=cfg.LOG_EVERY,
-                    callbacks=[checkpoint_callback])
+                    callbacks=[checkpoint_callback, lr_monitor],
+                    detect_anomaly = False)
 
     combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
     if ckpt_path is not None:

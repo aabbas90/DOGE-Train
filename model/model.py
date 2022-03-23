@@ -39,10 +39,11 @@ class FeatureExtractorLayer(torch.nn.Module):
                 num_con_lp_f, in_con_dim, out_con_dim,
                 num_edge_lp_f_with_ss, in_edge_dim, out_edge_dim,
                 use_layer_norm, use_skip_connections = False, 
-                use_def_mm = True):
+                use_def_mm = True, use_solver_costs = True):
         super(FeatureExtractorLayer, self).__init__()
 
         self.use_def_mm = use_def_mm
+        self.use_solver_costs = use_solver_costs
         self.con_updater = TransformerConv((num_var_lp_f + in_var_dim, num_con_lp_f + in_con_dim), 
                                             out_con_dim, 
                                             edge_dim = num_edge_lp_f_with_ss + in_edge_dim, 
@@ -72,11 +73,15 @@ class FeatureExtractorLayer(torch.nn.Module):
         # 0. Combine learned and fixed features:
         var_comb_f = self.combine_features(var_learned_f, var_lp_f)
         con_comb_f = self.combine_features(con_learned_f, con_lp_f)
-        if self.use_def_mm:
-            edge_comb_f = torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_lp_f_wo_ss), 1)
+        if self.use_solver_costs:
+            if self.use_def_mm:
+                edge_comb_f = torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_lp_f_wo_ss), 1)
+            else:
+                edge_comb_f = torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), edge_lp_f_wo_ss), 1)
         else:
-            edge_comb_f = torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), edge_lp_f_wo_ss), 1)
-        
+            assert(not self.use_def_mm)        
+            edge_comb_f = torch.cat((edge_learned_f, edge_lp_f_wo_ss), 1)
+
         # 1. Update constraint features (var, constraint, edge -> constraint_new):
         if self.use_skip_connections:
             con_learned_f = torch.relu(self.con_norm(con_learned_f + self.con_updater((var_comb_f, con_comb_f), edge_index_var_con, edge_comb_f)))
@@ -150,48 +155,51 @@ class FeatureExtractor(torch.nn.Module):
 
 class PrimalPerturbationBlock(torch.nn.Module):
     def __init__(self, var_lp_f_names, con_lp_f_names, edge_lp_f_names, depth, var_dim, con_dim, edge_dim, min_perturbation, 
-                use_layer_norm = False, predict_dist_weights = False, skip_connections = False):
+                use_layer_norm = False, skip_connections = False, use_lstm_var = False):
         super(PrimalPerturbationBlock, self).__init__()
-        assert(not predict_dist_weights)
         self.min_perturbation = min_perturbation
         self.var_lp_f_names = var_lp_f_names
         self.con_lp_f_names = con_lp_f_names
         self.edge_lp_f_names = edge_lp_f_names
         self.num_var_lp_f = len(var_lp_f_names)
         self.num_con_lp_f = len(con_lp_f_names)
-        self.num_edge_lp_f_with_ss = len(edge_lp_f_names) + 2
+        self.num_edge_lp_f_with_ss = len(edge_lp_f_names)
         self.feature_refinement = []
         for d in range(depth):
             self.feature_refinement.append(FeatureExtractorLayer(self.num_var_lp_f, var_dim, var_dim,
                                                                 self.num_con_lp_f, con_dim, con_dim,   
                                                                 self.num_edge_lp_f_with_ss, edge_dim, edge_dim,
-                                                                use_layer_norm, skip_connections, False))
+                                                                use_layer_norm, skip_connections, False, False))
 
         self.feature_refinement = torch.nn.ModuleList(self.feature_refinement)
-        self.pert_predictor = nn.Sequential(nn.Linear(self.num_edge_lp_f_with_ss + edge_dim, self.num_edge_lp_f_with_ss + edge_dim),
-                                            nn.ReLU(True),
-                                            nn.Linear(self.num_edge_lp_f_with_ss + edge_dim, 1))
-        if predict_dist_weights:
-            self.dist_weights_predictor = nn.Sequential(nn.Linear(edge_dim + self.num_edge_lp_f_with_ss, edge_dim),
-                                                nn.ReLU(True),
-                                                nn.Linear(edge_dim, 1))
-        else:
-            self.dist_weights_predictor = None
-
+        self.var_lstm = None
+        if use_lstm_var:
+            self.var_lstm = nn.LSTMCell(var_dim + 1, var_dim)
+        self.var_pert_predictor = nn.Sequential(nn.Linear(var_dim, var_dim), nn.ReLU(True), nn.Linear(var_dim, var_dim), nn.ReLU(True), nn.Linear(var_dim, 1))
+        self.tanh_softness = torch.nn.Parameter(torch.ones(1) * 10.0)
+        self.learned_pert_influence = torch.nn.Parameter(torch.ones(1) * 0.0001)
+        self.mm_sign_influence = torch.nn.Parameter(torch.ones(1) * 0.5)
+        
     def forward(self, solvers, var_lp_f, con_lp_f, 
-                solver_state, edge_lp_f_wo_ss, 
+                orig_solver_state, edge_lp_f_wo_ss, 
                 var_learned_f, con_learned_f, edge_learned_f, 
                 dist_weights, omega, edge_index_var_con,
                 num_dual_iterations, grad_dual_itr_max_itr, dual_improvement_slope,
-                batch_index_var, batch_index_con, batch_index_edge, norms):
+                batch_index_var, batch_index_con, batch_index_edge, num_bdds_per_inst,
+                var_hidden_states_lstm = None):
 
-        # First normalize input costs:
-        prev_lb = con_lp_f[:, self.con_lp_f_names.index('new_lb')].clone()
-        prev_mm_diff = edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('new_mm_diff')].clone()
-        solver_state, normalized_lb, norm_mm_diff, norms = sol_utils.normalize_costs(solver_state, prev_lb, prev_mm_diff, norms, batch_index_edge, batch_index_con)
+        # perturb orig_solver_state by knowing prev_solver_state.
 
-        con_lp_f[:, self.con_lp_f_names.index('new_lb')] = normalized_lb
-        edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('new_mm_diff')] = norm_mm_diff
+        # First normalize costs in prev_solver_state as they will be sent to GNN:
+        prev_var_costs = var_lp_f[:, self.var_lp_f_names.index('prev_obj')].clone()
+        prev_lb_per_bdd = con_lp_f[:, self.con_lp_f_names.index('prev_lb')].clone()
+        prev_mm_diff = edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_mm_diff')].clone()
+        prev_var_costs, prev_lb_per_bdd, prev_mm_diff, _, _ = sol_utils.normalize_costs_var(
+                prev_var_costs, prev_lb_per_bdd, prev_mm_diff, num_bdds_per_inst, batch_index_var, batch_index_con, batch_index_edge)
+
+        var_lp_f[:, self.var_lp_f_names.index('prev_obj')] = prev_var_costs
+        con_lp_f[:, self.con_lp_f_names.index('prev_lb')] = prev_lb_per_bdd
+        edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_mm_diff')] = prev_mm_diff
         try:
             assert(torch.all(torch.isfinite(var_learned_f)))
             assert(torch.all(torch.isfinite(con_learned_f)))
@@ -201,7 +209,7 @@ class PrimalPerturbationBlock(torch.nn.Module):
 
         for d in range(len(self.feature_refinement)):
             var_learned_f, con_learned_f, edge_learned_f = self.feature_refinement[d](
-                    var_learned_f, var_lp_f, con_learned_f, con_lp_f, edge_learned_f, solver_state, edge_lp_f_wo_ss, edge_index_var_con
+                    var_learned_f, var_lp_f, con_learned_f, con_lp_f, edge_learned_f, None, edge_lp_f_wo_ss, edge_index_var_con
                 )
             try:
                 assert(torch.all(torch.isfinite(var_learned_f)))
@@ -210,45 +218,52 @@ class PrimalPerturbationBlock(torch.nn.Module):
             except:
                 breakpoint()
 
-        primal_perturbation = 0.1 * self.pert_predictor(torch.cat((edge_learned_f, edge_lp_f_wo_ss), 1)).squeeze()
+        var_indices = edge_index_var_con[0]
+        prev_mm_diff = edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_mm_diff')].clone()
+        mm_diff_soft_sign = scatter_mean(torch.tanh(self.tanh_softness * prev_mm_diff), var_indices)
+        var_learned_f_with_mm = torch.cat((var_learned_f, mm_diff_soft_sign.unsqueeze(1)), 1)
+        if self.var_lstm is not None:
+            assert(var_hidden_states_lstm is not None)
+            var_hidden_states_lstm['h'], var_hidden_states_lstm['c'] = self.var_lstm(var_learned_f_with_mm, (var_hidden_states_lstm['h'], var_hidden_states_lstm['c']))
+            primal_perturbation_var = self.var_pert_predictor(var_hidden_states_lstm['h']).squeeze()
+        else:
+            primal_perturbation_var = self.var_pert_predictor(var_learned_f).squeeze()
 
-        # Make net primal costs have L2 norm = 1:
-        p_lo_cost = torch.relu(primal_perturbation + self.min_perturbation * 0.5)
-        p_hi_cost = torch.relu(-primal_perturbation + self.min_perturbation * 0.5)
-        # norm_costs_batch = torch.sqrt(scatter_sum(torch.square(new_hi_cost), batch_index_var)) + torch.sqrt(scatter_sum(torch.square(new_lo_cost), batch_index_var))
+        primal_perturbation_var = torch.abs(self.learned_pert_influence) * primal_perturbation_var + torch.abs(self.mm_sign_influence) * mm_diff_soft_sign
+        primal_perturbation_var_lo = -primal_perturbation_var + self.min_perturbation * 0.5
+        primal_perturbation_var_hi = primal_perturbation_var + self.min_perturbation * 0.5
+
+        p_lo_cost_var = torch.relu(primal_perturbation_var_lo)
+        p_hi_cost_var = torch.relu(primal_perturbation_var_hi)
         
-        # normalized_lo_cost = new_lo_cost / norm_costs_batch[batch_index_var]
-        # normalized_hi_cost = new_hi_cost / norm_costs_batch[batch_index_var]
-    
-        # Zero-out current primal objective in var_lp_f[:, 0] and add net primal cost.
-        # normalized_net_lo_cost_pert = normalized_lo_cost - var_lp_f[:, 0]
-        # normalized_net_hi_cost_pert = normalized_hi_cost - var_lp_f[:, 1]
-        # var_lp_f[:, 0] = normalized_net_lo_cost_pert
-        # var_lp_f[:, 1] = normalized_net_hi_cost_pert
+        p_lo_cost = p_lo_cost_var[var_indices] * dist_weights
+        p_hi_cost = p_hi_cost_var[var_indices] * dist_weights
 
         try:
-            assert(torch.all(torch.isfinite(primal_perturbation)))
+            assert(torch.all(torch.isfinite(primal_perturbation_var)))
         except:
             breakpoint()
 
-        #solver_state['lo_costs'], solver_state['hi_costs'] = sol_utils.perturb_primal_costs(solver_state['lo_costs'], solver_state['hi_costs'], normalized_net_lo_cost_pert, normalized_net_hi_cost_pert, dist_weights, edge_index_var_con)
-        solver_state['lo_costs'] = solver_state['lo_costs'] + p_lo_cost
-        solver_state['hi_costs'] = solver_state['hi_costs'] + p_hi_cost
-
+        pert_solver_state = {
+                            'lo_costs': orig_solver_state['lo_costs'] + p_lo_cost, 
+                            'hi_costs': orig_solver_state['hi_costs'] + p_hi_cost,
+                            'def_mm': orig_solver_state['def_mm']
+                            }
+        
         # Dual iterations
-        if self.dist_weights_predictor is not None:
-            dist_weights = sol_utils.normalize_distribution_weights_softmax(self.dist_weights_predictor(torch.cat((edge_learned_f, edge_lp_f_wo_ss), 1)).squeeze(), edge_index_var_con)
-        solver_state = sol_utils.dual_iterations(solvers, solver_state, dist_weights, num_dual_iterations, omega, dual_improvement_slope, grad_dual_itr_max_itr)
-        solver_state = sol_utils.distribute_delta(solvers, solver_state)
+        pert_solver_state = sol_utils.dual_iterations(solvers, pert_solver_state, dist_weights, num_dual_iterations, omega, dual_improvement_slope, grad_dual_itr_max_itr)
+        pert_solver_state = sol_utils.distribute_delta(solvers, pert_solver_state)
 
-        edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('new_mm_diff')] = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
-        con_lp_f[:, self.con_lp_f_names.index('new_lb')] = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state, True) # Update perturbed lower bound.
+        edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_mm_diff')] = sol_utils.compute_all_min_marginal_diff(solvers, pert_solver_state)
+        con_lp_f[:, self.con_lp_f_names.index('prev_lb')] = sol_utils.compute_per_bdd_lower_bound(solvers, pert_solver_state) # Update perturbed lower bound.
+        prev_var_costs = scatter_sum(pert_solver_state['hi_costs'] - pert_solver_state['lo_costs'], var_indices) # Convert to variable costs.
+        var_lp_f[:, self.var_lp_f_names.index('prev_obj')] = prev_var_costs
 
         # Update per BDD solution:
         with torch.no_grad(): #TODO: use black-box backprop?
-            edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('sol')] = sol_utils.compute_per_bdd_solution(solvers, solver_state)
+            edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_sol')] = sol_utils.compute_per_bdd_solution(solvers, pert_solver_state)
        
-        return solver_state, var_lp_f, con_lp_f, edge_lp_f_wo_ss, norms
+        return var_lp_f, con_lp_f, edge_lp_f_wo_ss, var_hidden_states_lstm
 
 class DualDistWeightsBlock(torch.nn.Module):
     def __init__(self, var_lp_f_names, con_lp_f_names, edge_lp_f_names, depth, var_dim, con_dim, edge_dim, use_layer_norm = False, predict_omega = False, skip_connections = False):
@@ -314,6 +329,28 @@ class DualDistWeightsBlock(torch.nn.Module):
        
         return solver_state, var_lp_f, con_lp_f, edge_lp_f_wo_ss, dist_weights, omega_vec
 
+def run_full_coord_iterations(solvers, lo_costs, hi_costs, def_mm, new_mm, damping, dist_weights, var_indices, num_dual_iterations):
+    solver_state = {'lo_costs': lo_costs, 'hi_costs': hi_costs, 'def_mm': def_mm}
+    for dual_itr in range(num_dual_iterations):
+        mm_to_subtract = damping * new_mm
+
+        mm_to_subtract_lo = torch.relu(-mm_to_subtract)
+        mm_to_subtract_hi = torch.relu(mm_to_subtract)
+
+        # Update costs:
+        solver_state['lo_costs'] = solver_state['lo_costs'] + scatter_sum(mm_to_subtract_lo, var_indices)[var_indices] * dist_weights - mm_to_subtract_lo
+        solver_state['hi_costs'] = solver_state['hi_costs'] + scatter_sum(mm_to_subtract_hi, var_indices)[var_indices] * dist_weights - mm_to_subtract_hi
+
+        #TODO Put a NN here?
+
+        # Compute new min-marginal differences:
+        new_mm = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
+        new_lb = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state)
+        # print(f'new_mm: [{new_mm.min():.3f}, {new_mm.max():.3f}]')
+        # print(f'new_lb: [{new_lb.min():.3f}, {new_lb.max():.3f}]')
+
+    return solvers, solver_state, new_mm, new_lb
+ 
 class DualFullCoordinateAscent(torch.nn.Module):
     def __init__(self, var_lp_f_names, con_lp_f_names, edge_lp_f_names, depth, var_dim, con_dim, edge_dim, use_layer_norm = False, skip_connections = False):
         super(DualFullCoordinateAscent, self).__init__()
@@ -328,7 +365,7 @@ class DualFullCoordinateAscent(torch.nn.Module):
             self.feature_refinement.append(FeatureExtractorLayer(self.num_var_lp_f, var_dim, var_dim,
                                                                 self.num_con_lp_f, con_dim, con_dim,   
                                                                 self.num_edge_lp_f_with_ss, edge_dim, edge_dim,
-                                                                use_layer_norm, skip_connections))
+                                                                use_layer_norm, skip_connections, use_def_mm=False))
 
         self.feature_refinement = torch.nn.ModuleList(self.feature_refinement)
         self.predictor = EdgeUpdater(self.num_edge_lp_f_with_ss + edge_dim, 2, self.num_var_lp_f + var_dim, self.num_con_lp_f + con_dim)
@@ -338,12 +375,14 @@ class DualFullCoordinateAscent(torch.nn.Module):
                 var_learned_f, con_learned_f, edge_learned_f, 
                 edge_index_var_con, num_dual_iterations):
 
+        assert(var_lp_f.shape[1] == self.num_var_lp_f)
+        assert(con_lp_f.shape[1] == self.num_con_lp_f)
+        assert(edge_lp_f_wo_ss.shape[1] == self.num_edge_lp_f_with_ss - 2)
         for d in range(len(self.feature_refinement)):
             var_learned_f, con_learned_f, edge_learned_f = self.feature_refinement[d](
                     var_learned_f, var_lp_f, con_learned_f, con_lp_f, edge_learned_f, solver_state, edge_lp_f_wo_ss, edge_index_var_con
                 )
 
-        #TODO Ensure def_mm = 0.
         prediction = self.predictor(
             torch.cat((var_learned_f, var_lp_f), 1), torch.cat((con_learned_f, con_lp_f), 1),
             torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), edge_lp_f_wo_ss), 1), 
@@ -359,24 +398,14 @@ class DualFullCoordinateAscent(torch.nn.Module):
             breakpoint()
 
         var_indices = edge_index_var_con[0, :]
-        new_mm = edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_mm_diff')].clone()
-        for dual_itr in range(num_dual_iterations):
-            incoming_message = damping * new_mm
-            net_delta_edge = scatter_sum(incoming_message, var_indices)[var_indices] * dist_weights - incoming_message
-
-            # Update costs:
-            # solver_state['lo_costs'] = solver_state['lo_costs'] + torch.relu(-net_delta_edge) # lo cost do we need to update lo costs in full coordinate ascent?
-            solver_state['hi_costs'] = solver_state['hi_costs'] + net_delta_edge  # corresponds directly to lagrange multipliers.
-    
-            # Compute new min-marginal differences:
-            new_mm = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
-            #TODO Put a NN here?
+        new_mm = edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('current_mm_diff')].clone()
+        solvers, solver_state, new_mm, new_lb = run_full_coord_iterations(solvers, solver_state['lo_costs'], solver_state['hi_costs'], solver_state['def_mm'], new_mm, damping, dist_weights, var_indices, num_dual_iterations)
 
         # Update per BDD solution:
         with torch.no_grad(): #TODO: use black-box backprop?
             edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('sol')] = sol_utils.compute_per_bdd_solution(solvers, solver_state)
 
         # Update lower bound for each BDD:
-        con_lp_f[:, self.con_lp_f_names.index('lb')] = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state)
-        edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_mm_diff')] = new_mm
-        return solver_state, var_lp_f, con_lp_f, edge_lp_f_wo_ss
+        con_lp_f[:, self.con_lp_f_names.index('lb')] = new_lb
+        edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('current_mm_diff')] = new_mm
+        return solver_state, var_lp_f, con_lp_f, edge_lp_f_wo_ss, dist_weights, damping

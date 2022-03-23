@@ -1,89 +1,199 @@
-import torch
-import numpy as np
-from torch_scatter.scatter import scatter_add
-torch.use_deterministic_algorithms(False)
-from data.dataloader import get_ilp_gnn_loaders
-from config_primal.defaults import get_cfg_defaults
+import torch, os
 import model.solver_utils as sol_utils
+from torch_scatter.scatter import scatter_sum, scatter_mean
+from metrics.primal_metrics import PrimalMetrics 
+from pytorch_lightning.core.lightning import LightningModule
+from typing import List, Set, Dict, Tuple, Optional
 
-def transfer_batch_to_device(batch, device):
-    batch.edge_index_var_con = batch.edge_index_var_con.to(device)
-    batch.omega = torch.tensor([0.5], device = device)
-    solvers, solver_state, per_bdd_sol, per_bdd_lb, dist_weights = sol_utils.init_solver_and_get_states(batch, device, 0, 1.0, batch.omega)
-    all_mm_diff = sol_utils.compute_all_min_marginal_diff(solvers, solver_state)
+class PrimalActMax(LightningModule):
+    def __init__(self, 
+                num_test_rounds: int,
+                num_dual_iter_test: int,
+                dual_improvement_slope_test: float,
+                grad_dual_itr_max_itr: int,
+                lr: float,
+                min_perturbation: float,
+                omega: float,
+                var_lp_features: List[str],
+                con_lp_features: List[str],
+                edge_lp_features: List[str],               
+                var_lp_features_init: List[str],
+                con_lp_features_init: List[str],
+                edge_lp_features_init: List[str],
+                log_every_n_steps: int = 20,
+                test_datanames: Optional[List[str]] = None
+                ):
+        super(PrimalActMax, self).__init__()
+        self.save_hyperparameters(
+                'num_test_rounds',
+                'num_dual_iter_test', 
+                'dual_improvement_slope_test',
+                'grad_dual_itr_max_itr', 
+                'lr',
+                'min_perturbation',
+                'omega',
+                'var_lp_features',
+                'con_lp_features',
+                'edge_lp_features',
+                'var_lp_features_init',
+                'con_lp_features_init',
+                'edge_lp_features_init',
+                'test_datanames')
 
-    batch.dist_weights = dist_weights # Isotropic weights.
+        self.test_datanames = test_datanames
+        self.log_every_n_steps = log_every_n_steps
 
-    var_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[0])
-    var_degree[torch.cumsum(batch.num_vars, 0) - 1] = 0 # Terminal nodes, not corresponding to any primal variable.
-    var_net_perturbation = torch.zeros_like(var_degree)
-    batch.var_lp_f = torch.stack((batch.objective.to(device), var_degree, var_net_perturbation), 1) # Obj, Deg, Net. Pert
-    batch.objective = None
+        self.eval_metrics_test = torch.nn.ModuleDict()
+        for data_name in test_datanames:
+            self.eval_metrics_test[data_name] = PrimalMetrics(num_test_rounds, self.hparams.con_lp_features)
 
-    con_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[1])
-    batch.con_lp_f = torch.stack((per_bdd_lb, batch.rhs_vector.to(device), batch.con_type.to(device), con_degree), 1) # BDD lb, rhs, con type, degree
-    batch.rhs_vector = None
-    batch.con_type = None
+    @classmethod
+    def from_config(cls, cfg, test_datanames, num_dual_iter_test, num_test_rounds, dual_improvement_slope_test):
+        return cls(
+            num_test_rounds = num_test_rounds,
+            var_lp_features = cfg.MODEL.VAR_LP_FEATURES,
+            con_lp_features = cfg.MODEL.CON_LP_FEATURES,
+            edge_lp_features = cfg.MODEL.EDGE_LP_FEATURES,
+            var_lp_features_init = cfg.MODEL.VAR_LP_FEATURES_INIT,
+            con_lp_features_init = cfg.MODEL.CON_LP_FEATURES_INIT,
+            edge_lp_features_init = cfg.MODEL.EDGE_LP_FEATURES_INIT,
+            num_dual_iter_test = num_dual_iter_test,
+            dual_improvement_slope_test = dual_improvement_slope_test,
+            grad_dual_itr_max_itr = cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR,
+            lr = cfg.TRAIN.BASE_LR,
+            min_perturbation = cfg.TRAIN.MIN_PERTURBATION,
+            omega = cfg.MODEL.OMEGA,
+            log_every_n_steps = cfg.LOG_EVERY,
+            test_datanames = test_datanames)
 
-    # Edge LP features:
-    batch.edge_rest_lp_f = torch.stack((per_bdd_sol, batch.con_coeff.to(device), all_mm_diff, all_mm_diff), 1)
-    batch.solver_state = solver_state
-    
-    batch.solvers = solvers
-    return batch
+    def transfer_batch_to_device(self, batch, device, dataloader_idx):
+        batch, dist_weights = sol_utils.init_solver_and_get_states(batch, device, 'ilp_stats', 
+                                self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init,
+                                0, 1.0, self.hparams.omega, distribute_delta=True)
+ 
+         # Normalize original costs as they will be sent to GNN:
+        var_costs = batch.var_lp_f[:, self.hparams.var_lp_features.index('orig_obj')]
+        lb_per_bdd = batch.con_lp_f[:, self.hparams.con_lp_features.index('orig_lb')]
+        mm_diff = batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('orig_mm_diff')]
+        var_costs, lb_per_bdd, mm_diff, batch.var_cost_mean, batch.var_cost_std = sol_utils.normalize_costs_var(
+            var_costs, lb_per_bdd, mm_diff, batch.num_cons, batch.batch_index_var, batch.batch_index_con, batch.batch_index_edge)
+        batch.var_lp_f[:, self.hparams.var_lp_features.index('orig_obj')] = var_costs
+        batch.con_lp_f[:, self.hparams.con_lp_features.index('orig_lb')] = lb_per_bdd
+        batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('orig_mm_diff')] = mm_diff
 
-def get_valid_target_solution_edge(batch):
-    valid_edge_mask = sol_utils.get_valid_edge_mask(batch)
-    var_indices = batch.edge_index_var_con[0]
-    valid_var_indices = var_indices[valid_edge_mask]
-    gt_ilp_sol_var = torch.cat([torch.from_numpy(s).to(var_indices.device) for s in batch.gt_info['ilp_stats']['sol']], 0)
-    gt_ilp_sol_edge = gt_ilp_sol_var[valid_var_indices]
-    return gt_ilp_sol_edge, valid_edge_mask
+        batch.dist_weights = dist_weights # Isotropic weights.
+        batch.primal_perturbation_var = torch.zeros_like(var_costs)
 
-def primal_loss(mm_pred, gt_ilp_sol_edge, valid_edge_mask, loss_margin):
-    # Gather the solution w.r.t all valid edges
-    mm_pred_valid = mm_pred[valid_edge_mask]
+        return batch
 
-    # if gt_ilp_solution > 0 then mm_pred should be < -eps and if gt_ilp_solution == 0 then mm_pred should be > eps:
-    return torch.sum(torch.relu(gt_ilp_sol_edge * (mm_pred_valid + loss_margin)) + torch.relu((gt_ilp_sol_edge - 1.0) * (mm_pred_valid - loss_margin)))
+    def log_metrics_test(self, metrics_calculator, prefix, suffix):
+        assert('test' in prefix)
+        metrics_dict = metrics_calculator.compute()
+        print(f'\n{prefix}')
+        for metric_name, metric_value_per_round_dict in metrics_dict.items():
+            print(f'\t {metric_name}_{suffix}: ')
+            prev_value = None
+            for round, value in metric_value_per_round_dict.items():
+                self.logger.experiment.add_scalar(f'{prefix}/{metric_name}_{suffix}', value, global_step = int(round.replace('round_', '')))
+                if prev_value is None or prev_value != value:
+                    print(f'\t \t {round}: {value}')
+                prev_value = value
+        self.logger.experiment.flush()
+        metrics_calculator.reset()
 
-cfg = get_cfg_defaults()
-combined_train_loader, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
-device = torch.device('cuda:0')
-num_dual_iterations = 20
-omega = torch.tensor(0.5)
-batch = next(iter(combined_train_loader))
-batch = transfer_batch_to_device(batch, device)
-gt_ilp_sol_edge, valid_edge_mask = get_valid_target_solution_edge(batch)
-pert = torch.zeros_like(batch.solver_state['lo_costs'])
-lo_costs = batch.solver_state['lo_costs']
-hi_costs = batch.solver_state['hi_costs']
-def_mm = batch.solver_state['def_mm']
-prev_loss = 0
-for i in range(100):
-    dual_cost_perturbation = pert.clone().detach()
-    solver_state = {'lo_costs': lo_costs.clone().detach(), 'hi_costs': hi_costs.clone().detach(), 'def_mm': def_mm.clone().detach()}
-    dual_cost_perturbation.requires_grad = True
-    dual_cost_perturbation.retain_grad()
-    new_lo = solver_state['lo_costs']  #+ torch.relu(-dual_cost_perturbation)
-    new_hi = solver_state['hi_costs'] + dual_cost_perturbation  #+ torch.relu(dual_cost_perturbation)
-    new_hi.retain_grad()
-    new_solver_state = {'lo_costs': new_lo, 'hi_costs': new_hi, 'def_mm': def_mm.clone().detach()}
-    solver_state_itr = sol_utils.dual_iterations(batch.solvers, new_solver_state, batch.dist_weights, num_dual_iterations, omega, 1e-6, 0)
-    solver_state_itr['hi_costs'].retain_grad()
-    solver_state_dd = sol_utils.distribute_delta(batch.solvers, solver_state_itr)
-    solver_state_dd['hi_costs'].retain_grad()
-    new_mm = sol_utils.compute_all_min_marginal_diff(batch.solvers, solver_state_dd)
-    new_mm.retain_grad()
-    # if i > 3:
-    #     breakpoint()
-    current_loss = primal_loss(new_mm, gt_ilp_sol_edge, valid_edge_mask, 1e-3)
-    current_loss.backward()
-    # if current_loss.item() == prev_loss:
-    #     breakpoint()
-    prev_loss = current_loss.item()
-    print(f'{i}: {current_loss.item()}')
-    pert = pert - 1e-2 * dual_cost_perturbation.grad
-    print(f'dual_cost_perturbation.grad: {dual_cost_perturbation.grad.abs().max():.4f}, new_hi: {new_hi.grad.abs().max():.4f}, new_mm: {new_mm.grad.abs().max()}')
+    def test_epoch_end(self, outputs):
+        for data_name in self.test_datanames:
+            self.log_metrics_test(self.eval_metrics_test[data_name], f'test_{data_name}', 'act_max')
 
-breakpoint()
+    def loss_on_lb_increase(self, con_lp_f, batch_index_con, orig_var_cost_mean, orig_var_cost_std):
+        # Larger problems should have more lb increase so taking sum directly:
+        prev_lb_per_instance = scatter_sum(con_lp_f[:, self.hparams.con_lp_features.index('prev_lb')], batch_index_con)
+        orig_lb_per_instance = scatter_sum(con_lp_f[:, self.hparams.con_lp_features.index('orig_lb')], batch_index_con) * orig_var_cost_std + orig_var_cost_mean
+        return (prev_lb_per_instance - orig_lb_per_instance).mean()  
+
+    def single_primal_round(self, batch, primal_perturbation_var, dist_weights):
+        assert(torch.all(torch.isfinite(primal_perturbation_var)))
+        var_indices = batch.edge_index_var_con[0]
+        primal_perturbation_var_lo = -primal_perturbation_var + self.hparams.min_perturbation * 0.5
+        primal_perturbation_var_hi = primal_perturbation_var + self.hparams.min_perturbation * 0.5
+
+        p_lo_cost_var = torch.relu(primal_perturbation_var_lo)
+        p_hi_cost_var = torch.relu(primal_perturbation_var_hi)
+        
+        p_lo_cost = p_lo_cost_var[var_indices] * dist_weights
+        p_hi_cost = p_hi_cost_var[var_indices] * dist_weights
+
+        pert_solver_state = {
+                            'lo_costs': batch.solver_state['lo_costs'] + p_lo_cost, 
+                            'hi_costs': batch.solver_state['hi_costs'] + p_hi_cost,
+                            'def_mm': batch.solver_state['def_mm']
+                            }
+        
+        # Dual iterations
+        pert_solver_state = sol_utils.dual_iterations(batch.solvers, pert_solver_state, dist_weights, self.hparams.num_dual_iter_test, 
+                                                    batch.omega, self.hparams.dual_improvement_slope_test, self.hparams.grad_dual_itr_max_itr)
+        pert_solver_state = sol_utils.distribute_delta(batch.solvers, pert_solver_state)
+
+        batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('prev_mm_diff')] = sol_utils.compute_all_min_marginal_diff(batch.solvers, pert_solver_state)
+        batch.con_lp_f[:, self.hparams.con_lp_features.index('prev_lb')] = sol_utils.compute_per_bdd_lower_bound(batch.solvers, pert_solver_state) # Update perturbed lower bound.
+        prev_var_costs = scatter_sum(pert_solver_state['hi_costs'] - pert_solver_state['lo_costs'], var_indices) # Convert to variable costs.
+        batch.var_lp_f[:, self.hparams.var_lp_features.index('prev_obj')] = prev_var_costs
+
+        # Update per BDD solution:
+        with torch.no_grad():
+            batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('prev_sol')] = sol_utils.compute_per_bdd_solution(batch.solvers, pert_solver_state)
+        return batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f
+
+    def primal_rounds(self, batch):
+        logs = []
+        primal_perturbation_var = batch.primal_perturbation_var.clone().detach()
+        dist_weights = batch.dist_weights.clone().detach()
+        for r in range(self.hparams.num_test_rounds):
+            with torch.set_grad_enabled(True):
+                primal_perturbation_var_g = primal_perturbation_var.clone().detach()
+                primal_perturbation_var_g.requires_grad = True
+                primal_perturbation_var_g.retain_grad()
+
+                # dist_weights_g = dist_weights.clone().detach()
+                # dist_weights_g.requires_grad = True
+                # dist_weights_g.retain_grad()
+                # dist_weights_gp = sol_utils.normalize_distribution_weights_softmax(dist_weights_g, batch.edge_index_var_con)
+
+                batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f = self.single_primal_round(batch, primal_perturbation_var_g, dist_weights)
+                all_mm_diff = batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('prev_mm_diff')].clone().detach()
+                pert_lb = batch.con_lp_f[:, self.hparams.con_lp_features.index('prev_lb')].clone().detach()
+                current_loss = self.loss_on_lb_increase(batch.con_lp_f, batch.batch_index_con, batch.var_cost_mean, batch.var_cost_std)
+                logs.append({'r' : r, 'all_mm_diff': all_mm_diff.to('cpu'), 'prev_lb': pert_lb.to('cpu')})
+                if current_loss is not None:
+                    logs[-1]['loss'] = current_loss.detach()
+
+                current_loss.backward()
+                primal_perturbation_var = primal_perturbation_var - self.hparams.lr *  primal_perturbation_var_g.grad
+                # dist_weights = dist_weights - self.hparams.lr *  dist_weights_g.grad
+
+                batch.var_lp_f = batch.var_lp_f.detach()
+                batch.con_lp_f = batch.con_lp_f.detach()
+                batch.edge_rest_lp_f = batch.edge_rest_lp_f.detach()
+                print(f'Round: {r}: Loss: {current_loss.item():.3f}')
+            
+            hi_assignments = all_mm_diff < -1e-6
+            lo_assignments = all_mm_diff > 1e-6
+            var_hi = scatter_mean(hi_assignments.to(torch.float32), batch.edge_index_var_con[0]) >= 1.0 - 1e-6
+            var_lo = scatter_mean(lo_assignments.to(torch.float32), batch.edge_index_var_con[0]) >= 1.0 - 1e-6
+            var_lo[-1] = True # terminal node.
+            if (var_hi + var_lo).min() >= 1.0 - 1e-6: # Solution found
+                return batch, logs
+
+        return batch, logs
+
+    def test_step(self, batch, batch_idx, dataset_idx = 0):
+        assert len(batch.file_path) == 1, 'batch size 1 required for testing.'
+        instance_name = os.path.basename(batch.file_path[0])
+        data_name = self.test_datanames[dataset_idx]
+
+        batch_updated, logs = self.primal_rounds(batch)
+        instance_level_metrics = PrimalMetrics(self.hparams.num_test_rounds, self.hparams.con_lp_features).to(batch.edge_index_var_con.device)
+        instance_level_metrics.update(batch_updated, logs)
+        self.log_metrics_test(instance_level_metrics, f'test_{data_name}_{instance_name}', 'act_max')
+        self.eval_metrics_test[data_name].update(batch_updated, logs)
+        return 0

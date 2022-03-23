@@ -172,8 +172,10 @@ class DualAscentBDD(LightningModule):
             raise ValueError(f'Optimizer {self.hparams.optimizer_name} not exposed.')
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
-        batch, _ = sol_utils.init_solver_and_get_states(batch, device, 'lp_stats',
-                    self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init, 0, 1.0, self.hparams.omega_initial)
+        gt_type = None # 'lp_stats' TODOAA
+        batch, _ = sol_utils.init_solver_and_get_states(batch, device, gt_type,
+                    self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init, 0, 1.0, self.hparams.omega_initial, 
+                    distribute_delta = self.hparams.full_coordinate_ascent)
         return batch
 
     def compute_training_start_round(self):
@@ -304,15 +306,16 @@ class DualAscentBDD(LightningModule):
             except:
                 breakpoint()
         else:
-            batch.solver_state, batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f = self.dual_block(
-                                                                    batch.solvers, batch.var_lp_f, batch.con_lp_f, 
-                                                                    batch.solver_state, batch.edge_rest_lp_f, 
-                                                                    batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f, 
-                                                                    batch.edge_index_var_con, num_dual_iterations)
+            batch.solver_state, batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f, dist_weights, omega_vec = self.dual_block(
+                                                                                    batch.solvers, batch.var_lp_f, batch.con_lp_f, 
+                                                                                    batch.solver_state, batch.edge_rest_lp_f, 
+                                                                                    batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f, 
+                                                                                    batch.edge_index_var_con, num_dual_iterations)
 
         return batch, dist_weights, omega_vec
 
     def dual_rounds(self, batch, num_rounds, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, is_training = False, instance_log_name = None, non_learned_updates = False):
+        print(f'Running: {batch.file_path[0]}')
         if not non_learned_updates:
             batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f = self.lp_feature_extractor(batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.edge_rest_lp_f, batch.edge_index_var_con)
         loss = 0

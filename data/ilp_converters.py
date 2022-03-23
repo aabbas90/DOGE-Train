@@ -39,7 +39,9 @@ def create_normalized_bdd_instance(ilp_path):
     var_names = []
     for var in variables:
     # GM can contain continuous variables even though they will ultimately have binary value. TODOAA.
-    #     assert var.VType == 'B', f'Variable {var} is not binary in file {ilp_path} and instead of type {var.VType}'
+        if (var.VType != 'B'): #, f'Variable {var} is not binary in file {ilp_path} and instead of type {var.VType}'
+            print(f'Non-binary variable.')
+            return None, None, None
         objs.append(var.Obj)
         var_names.append(var.VarName) 
 
@@ -67,8 +69,10 @@ def create_normalized_bdd_instance(ilp_path):
         for i in range(constraint_exp.size()):
             var = constraint_exp.getVar(i).VarName
             coeff = constraint_exp.getCoeff(i)
-            assert(int(coeff) == coeff)
-            assert(int(rhs_value) == rhs_value)
+            if int(coeff) != coeff or int(rhs_value) != rhs_value: #TODO: Handle fractional values in constraints. 
+                print(f'Fractional value in constraint.')
+                return None, None, None
+
             constraint_var_names.append(str(var))
             constraint_var_coefficients.append(int(coeff * multiplier))
             max_coeff = max(max_coeff, coeff)
@@ -85,6 +89,8 @@ def map_solution_order(solution_dict, bdd_ilp_instance):
 
 def create_bdd_repr_from_ilp(ilp_path, gt_info, load_constraint_coeffs = False):
     bdd_ilp_instance, obj_multiplier, obj_offset = create_normalized_bdd_instance(ilp_path)
+    if bdd_ilp_instance is None:
+        return None, None
 
     solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs)
     num_vars = solver.nr_primal_variables() + 1 # +1 due to terminal node.
@@ -182,7 +188,7 @@ def create_graph_from_bdd_repr(bdd_repr, gt_info, file_path):
     for stat in ['lp_stats', 'ilp_stats']:
         if stat in gt_info and gt_info[stat]['sol_dict'] is not None:
             assert('sol_dict' in gt_info[stat])
-            assert(gt_info[stat]['sol'].size + 1 == bdd_repr['num_vars'])
+            # assert(gt_info[stat]['sol'].size + 1 == bdd_repr['num_vars']) # not true for miplib.
             gt_info[stat]['sol'] = np.concatenate((gt_info[stat]['sol'], np.array([0.0])), 0)
             gt_info[stat]['sol_dict'] = None # pyg tries to collate it very slowly.
 
