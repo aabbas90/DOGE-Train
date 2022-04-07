@@ -1,5 +1,5 @@
 import torch
-from torch_scatter.scatter import scatter_sum, scatter_mean
+from torch_scatter import scatter_sum, scatter_mean, scatter_std
 from pytorch_lightning.core.lightning import LightningModule
 from typing import List, Set, Dict, Tuple, Optional
 from torch.optim import Adam
@@ -37,9 +37,12 @@ class PrimalRoundingBDD(LightningModule):
                 feature_extractor_depth: int,
                 primal_predictor_depth: int,
                 optimizer_name: str,
+                num_hidden_layers_edge: int,
                 datasets: List[str],
                 val_fraction: List[int],
                 start_episodic_training_after_epoch: int,
+                mm_tanh_mult: float = 1e3,
+                mm_agr_loss_weight: float = 0.0,
                 num_train_rounds_with_grad: int = 1,
                 use_layer_norm: bool = False,
                 use_lstm_var: bool = False,
@@ -64,6 +67,7 @@ class PrimalRoundingBDD(LightningModule):
                 'loss_discount_factor',
                 'loss_margin',
                 'min_perturbation',
+                'mm_tanh_mult',
                 'var_lp_features',
                 'con_lp_features',
                 'edge_lp_features',
@@ -75,6 +79,8 @@ class PrimalRoundingBDD(LightningModule):
                 'num_learned_edge_f',
                 'feature_extractor_depth', 
                 'primal_predictor_depth', 
+                'num_hidden_layers_edge',
+                'mm_agr_loss_weight',
                 'use_lstm_var',
                 'use_layer_norm',
                 'optimizer_name',
@@ -84,13 +90,21 @@ class PrimalRoundingBDD(LightningModule):
                 'val_datanames',
                 'test_datanames')
 
-        self.lp_feature_extractor = FeatureExtractor(
-                        num_var_lp_f = len(var_lp_features), out_var_dim = num_learned_var_f, 
-                        num_con_lp_f = len(con_lp_features), out_con_dim = num_learned_con_f,
-                        num_edge_lp_f = len(edge_lp_features), out_edge_dim = num_learned_edge_f,
-                        depth = feature_extractor_depth, use_layer_norm = use_layer_norm, use_def_mm = False)
+        self.first_primal_block = PrimalPerturbationBlock(
+                        var_lp_f_names = var_lp_features,
+                        con_lp_f_names = con_lp_features, 
+                        edge_lp_f_names = edge_lp_features,
+                        depth = feature_extractor_depth,
+                        var_dim = num_learned_var_f, 
+                        con_dim = num_learned_con_f,
+                        edge_dim = num_learned_edge_f,
+                        use_layer_norm = use_layer_norm,
+                        min_perturbation = min_perturbation,
+                        num_hidden_layers_edge = num_hidden_layers_edge,
+                        is_first_block = True,
+                        use_lstm_var = False)
 
-        self.primal_block = PrimalPerturbationBlock(
+        self.iterative_primal_block = PrimalPerturbationBlock(
                         var_lp_f_names = var_lp_features,
                         con_lp_f_names = con_lp_features, 
                         edge_lp_f_names = edge_lp_features,
@@ -100,7 +114,9 @@ class PrimalRoundingBDD(LightningModule):
                         edge_dim = num_learned_edge_f,
                         use_layer_norm = use_layer_norm,
                         min_perturbation = min_perturbation,
-                        use_lstm_var = use_lstm_var)
+                        num_hidden_layers_edge = num_hidden_layers_edge,
+                        use_lstm_var = use_lstm_var,
+                        is_first_block = False)
 
         self.val_datanames = val_datanames
         self.test_datanames = test_datanames
@@ -113,7 +129,7 @@ class PrimalRoundingBDD(LightningModule):
         self.eval_metrics_val_non_learned = torch.nn.ModuleDict()
         self.non_learned_updates_val = True
         for data_name in val_datanames:
-            self.eval_metrics_val[data_name] =PrimalMetrics(num_test_rounds, self.hparams.con_lp_features)
+            self.eval_metrics_val[data_name] = PrimalMetrics(num_test_rounds, self.hparams.con_lp_features)
             self.eval_metrics_val_non_learned[data_name] = PrimalMetrics(num_test_rounds, self.hparams.con_lp_features, on_baseline = True)
 
         self.non_learned_updates_test = non_learned_updates_test
@@ -135,6 +151,7 @@ class PrimalRoundingBDD(LightningModule):
             var_lp_features_init = cfg.MODEL.VAR_LP_FEATURES_INIT,
             con_lp_features_init = cfg.MODEL.CON_LP_FEATURES_INIT,
             edge_lp_features_init = cfg.MODEL.EDGE_LP_FEATURES_INIT,
+            num_hidden_layers_edge = cfg.MODEL.NUM_HIDDEN_LAYERS_EDGE,
             num_dual_iter_train = cfg.TRAIN.NUM_DUAL_ITERATIONS,
             num_dual_iter_test = num_dual_iter_test,
             dual_improvement_slope_train = cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE,
@@ -145,6 +162,7 @@ class PrimalRoundingBDD(LightningModule):
             loss_discount_factor = cfg.TRAIN.LOSS_DISCOUNT_FACTOR,
             loss_margin = cfg.TRAIN.LOSS_MARGIN,
             min_perturbation = cfg.TRAIN.MIN_PERTURBATION,
+            mm_tanh_mult = cfg.TRAIN.MM_TANH_MULT,
             omega = cfg.MODEL.OMEGA,
             num_learned_var_f = cfg.MODEL.VAR_FEATURE_DIM, 
             num_learned_con_f = cfg.MODEL.CON_FEATURE_DIM,
@@ -155,6 +173,7 @@ class PrimalRoundingBDD(LightningModule):
             optimizer_name = cfg.TRAIN.OPTIMIZER,
             use_layer_norm = cfg.MODEL.USE_LAYER_NORM,
             use_lstm_var = cfg.MODEL.USE_LSTM_VAR,
+            mm_agr_loss_weight = cfg.TRAIN.MM_AGR_LOSS_WEIGHT,
             datasets = cfg.DATA.DATASETS,
             val_fraction = cfg.DATA.VAL_FRACTION,
             log_every_n_steps = cfg.LOG_EVERY,
@@ -165,26 +184,28 @@ class PrimalRoundingBDD(LightningModule):
     def configure_optimizers(self):
         if self.hparams.optimizer_name == 'Adam':
             optimizer = Adam(self.parameters(), lr=self.hparams.lr)
-            scheduler = MultiStepLR(optimizer, milestones = [15], gamma=self.hparams.lr_gamma)
-            return [optimizer], [scheduler]
+            #scheduler = MultiStepLR(optimizer, milestones = [15], gamma=self.hparams.lr_gamma)
+            return optimizer #, [scheduler]
         else:
             raise ValueError(f'Optimizer {self.hparams.optimizer_name} not exposed.')
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
         batch, dist_weights = sol_utils.init_solver_and_get_states(batch, device, 'ilp_stats', 
                                 self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init,
-                                0, 1.0, self.hparams.omega, distribute_delta=True)
- 
-         # Normalize original costs as they will be sent to GNN:
-        var_costs = batch.var_lp_f[:, self.hparams.var_lp_features.index('orig_obj')]
-        lb_per_bdd = batch.con_lp_f[:, self.hparams.con_lp_features.index('orig_lb')]
-        mm_diff = batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('orig_mm_diff')]
-        var_costs, lb_per_bdd, mm_diff, batch.var_cost_mean, batch.var_cost_std = sol_utils.normalize_costs_var(
-            var_costs, lb_per_bdd, mm_diff, batch.num_cons, batch.batch_index_var, batch.batch_index_con, batch.batch_index_edge)
-        batch.var_lp_f[:, self.hparams.var_lp_features.index('orig_obj')] = var_costs
-        batch.con_lp_f[:, self.hparams.con_lp_features.index('orig_lb')] = lb_per_bdd
-        batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('orig_mm_diff')] = mm_diff
+                                0, 1.0, self.hparams.omega, distribute_delta = True)
 
+        mm_diff = batch.edge_rest_lp_f[:, self.hparams.edge_lp_features_init.index('mm_diff')]
+        lb_per_bdd = batch.con_lp_f[:, self.hparams.con_lp_features_init.index('lb')]
+        net_var_cost, net_edge_cost, mm_diff, lb_per_bdd, constant_per_bdd, norm = sol_utils.compute_normalized_solver_costs_for_primal(batch.solver_state, mm_diff, lb_per_bdd, batch.edge_index_var_con,
+                                                                                                            batch.batch_index_var, batch.batch_index_con, batch.batch_index_edge)
+        
+        #TODO: net_var_cost is not fully equal to obj. 
+        batch.var_lp_f = sol_utils.set_features('obj', self.hparams.var_lp_features_init, batch.var_lp_f, net_var_cost)
+        batch.con_lp_f = sol_utils.set_features('lb', self.hparams.con_lp_features_init, batch.con_lp_f, lb_per_bdd)
+        batch.con_lp_f = sol_utils.set_features('orig_constant', self.hparams.con_lp_features_init, batch.con_lp_f, constant_per_bdd)
+        batch.edge_rest_lp_f = sol_utils.set_features('mm_diff', self.hparams.edge_lp_features_init, batch.edge_rest_lp_f, mm_diff)
+        batch.norm_orig_solver_state = {'norm_cost': net_edge_cost}
+        batch.orig_norm = norm
         batch.dist_weights = dist_weights # Isotropic weights.
         if self.hparams.use_lstm_var:
             batch.var_hidden_states_lstm = {'h': torch.zeros((batch.var_lp_f.shape[0], self.hparams.num_learned_var_f), device = device),
@@ -198,13 +219,13 @@ class PrimalRoundingBDD(LightningModule):
         max_training_epoch_mod = self.trainer.max_epochs // 10 # Divides into ten journeys.
         fraction = float(current_start_epoch) / max_training_epoch_mod
         if fraction < 0:
-            return 0
+            return max(0, self.hparams.num_train_rounds_with_grad - 1)
         fraction = fraction % 1
         fraction = fraction * fraction
         mean_start_step = fraction * (self.hparams.num_train_rounds)
         proposed_start_step = np.round(np.random.normal(mean_start_step, 3)).astype(np.int32).item(0)
         self.logger.experiment.add_scalar('train/start_grad_round', proposed_start_step, global_step = self.global_step)
-        return max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0)
+        return max(max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0), self.hparams.num_train_rounds_with_grad - 1)
 
     def log_metrics(self, metrics_calculator, mode):
         metrics_dict = metrics_calculator.compute()
@@ -228,10 +249,11 @@ class PrimalRoundingBDD(LightningModule):
         self.logger.experiment.flush()
         metrics_calculator.reset()
 
+    def on_train_epoch_start(self):
+        self.num_rounds = self.compute_training_start_round() + 1
+
     def training_epoch_end(self, outputs):
         self.log_metrics(self.train_metrics, 'train')
-        # sch = self.lr_schedulers()
-        # sch.step()
 
     def validation_epoch_end(self, outputs):
         for data_name in self.val_datanames:
@@ -247,14 +269,22 @@ class PrimalRoundingBDD(LightningModule):
             if self.non_learned_updates_test:
                 self.log_metrics_test(self.eval_metrics_test_non_learned[data_name], f'test_{data_name}', 'non_learned')
 
-    def loss_on_lb_increase(self, con_lp_f, batch_index_con, orig_var_cost_mean, orig_var_cost_std):
+    def loss_on_lb_increase(self, con_lp_f, batch_index_con):
         # lb_per_instance = scatter_mean(con_lp_f[:, self.con_lp_f_names.index('prev_lb')], batch_index_con) * len(batch_index_con)
         # return lb_per_instance.sum()
         # Larger problems should have more lb increase so taking sum directly:
         prev_lb_per_instance = scatter_sum(con_lp_f[:, self.hparams.con_lp_features.index('prev_lb')], batch_index_con)
-        orig_lb_per_instance = scatter_sum(con_lp_f[:, self.hparams.con_lp_features.index('orig_lb')], batch_index_con) * orig_var_cost_std + orig_var_cost_mean
-        return (prev_lb_per_instance - orig_lb_per_instance).mean()  
+        orig_lb_per_instance = scatter_sum(con_lp_f[:, self.hparams.con_lp_features.index('orig_lb')], batch_index_con)
+        return torch.mean(torch.square((prev_lb_per_instance - orig_lb_per_instance) / (1 + orig_lb_per_instance)))
  
+    def loss_on_mm_agreement(self, edge_lp_f, var_indices, valid_edge_mask):
+        mm_diff = edge_lp_f[:, self.hparams.edge_lp_features.index('prev_mm_diff')]
+        mm_sign = torch.tanh(self.hparams.mm_tanh_mult * mm_diff[valid_edge_mask])
+        valid_var_indices = var_indices[valid_edge_mask]
+        mm_mean = scatter_mean(mm_sign, valid_var_indices)[valid_var_indices]
+        mm_std = scatter_mean(torch.square(mm_sign - mm_mean), valid_var_indices)
+        return mm_std.sum()
+
     # def primal_loss(self, mm_pred, gt_ilp_sol_edge, valid_edge_mask, batch_index_edge):
     #     if gt_ilp_sol_edge is None:
     #         return None
@@ -275,33 +305,44 @@ class PrimalRoundingBDD(LightningModule):
     #     return torch.cat(batch.gt_sol_edge, 0)
 
     def single_primal_round(self, batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr):
-        batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f, batch.var_hidden_states_lstm = self.primal_block(
+        batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f, batch.var_hidden_states_lstm, batch.prev_norm = self.iterative_primal_block(
                                                                 batch.solvers, batch.var_lp_f, batch.con_lp_f, batch.solver_state,
-                                                                batch.edge_rest_lp_f, 
+                                                                batch.norm_orig_solver_state, batch.edge_rest_lp_f,
                                                                 batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f, 
                                                                 batch.dist_weights, batch.omega, batch.edge_index_var_con,
                                                                 num_dual_iterations, grad_dual_itr_max_itr, improvement_slope,
                                                                 batch.batch_index_var, batch.batch_index_con, batch.batch_index_edge,
-                                                                batch.num_cons, batch.var_hidden_states_lstm)
+                                                                batch.var_hidden_states_lstm)
         return batch
 
     def primal_rounds(self, batch, num_rounds, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, is_training = False):
-        batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f = self.lp_feature_extractor(batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.edge_rest_lp_f, batch.edge_index_var_con)
+        batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f, batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f, norm = self.first_primal_block(
+                                                                                batch.solvers, batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.norm_orig_solver_state,
+                                                                                batch.edge_rest_lp_f, None, None, None, 
+                                                                                batch.dist_weights, batch.omega, batch.edge_index_var_con,
+                                                                                num_dual_iterations, grad_dual_itr_max_itr, improvement_slope,
+                                                                                batch.batch_index_var, batch.batch_index_con, batch.batch_index_edge, None)
         loss = 0
         logs = []
         # gt_ilp_sol_edge = self.try_concat_gt_edge_solution(batch, is_training)
         for r in range(num_rounds):
             with torch.set_grad_enabled(r >= num_rounds - self.hparams.num_train_rounds_with_grad and is_training):
-                batch.con_lp_f[:, self.hparams.con_lp_features.index('round_index')] = r
                 batch = self.single_primal_round(batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr)
                 all_mm_diff = batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('prev_mm_diff')].clone().detach()
                 pert_lb = batch.con_lp_f[:, self.hparams.con_lp_features.index('prev_lb')].clone().detach()
-                current_loss = self.loss_on_lb_increase(batch.con_lp_f, batch.batch_index_con, batch.var_cost_mean, batch.var_cost_std)
-                logs.append({'r' : r, 'all_mm_diff': all_mm_diff, 'prev_lb': pert_lb})
+                # current_loss = (self.loss_on_lb_increase(batch.con_lp_f, batch.batch_index_con) + 
+                #                 self.loss_on_mm_agreement(batch.edge_rest_lp_f, batch.edge_index_var_con[0], batch.valid_edge_mask))
+                current_loss = self.loss_on_lb_increase(batch.con_lp_f, batch.batch_index_con)
+                if self.hparams.mm_agr_loss_weight > 0.0:
+                    current_loss = current_loss + self.loss_on_mm_agreement(batch.edge_rest_lp_f, batch.edge_index_var_con[0], batch.valid_edge_mask)
+                logs.append({'r' : r, 'all_mm_diff': all_mm_diff.detach(), 'prev_lb': pert_lb.detach(), 'norm': batch.prev_norm.detach()})
                 if current_loss is not None:
-                    loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r - 1) * current_loss
                     logs[-1]['loss'] = current_loss.detach()
+                    if self.hparams.loss_discount_factor > 0.0: # Apply loss on all stages including intermediate ones.
+                        loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r + 1) * current_loss
 
+        if self.hparams.loss_discount_factor == 0.0:
+            loss = current_loss
         return loss, batch, logs
 
     def primal_rounds_non_learned(self, batch, num_rounds, num_dual_iterations, improvement_slope):
@@ -310,8 +351,7 @@ class PrimalRoundingBDD(LightningModule):
         return 0, batch, logs
 
     def training_step(self, batch, batch_idx):
-        num_rounds = self.compute_training_start_round() + 1
-        loss, batch, logs = self.primal_rounds(batch, num_rounds, self.hparams.num_dual_iter_train,  self.hparams.dual_improvement_slope_train, self.hparams.grad_dual_itr_max_itr, is_training = True)
+        loss, batch, logs = self.primal_rounds(batch, self.num_rounds, self.hparams.num_dual_iter_train,  self.hparams.dual_improvement_slope_train, self.hparams.grad_dual_itr_max_itr, is_training = True)
         losses_dict = {}
         for log_r in logs:
             r = log_r['r']
@@ -319,9 +359,6 @@ class PrimalRoundingBDD(LightningModule):
         self.logger.experiment.add_scalars(f'train/loss_every_step', losses_dict, global_step = self.global_step)
         if self.global_step % self.log_every_n_steps == 0:
             self.train_metrics.update(batch, logs)
-        self.logger.experiment.add_scalar('train/tanh_softness', self.primal_block.tanh_softness, global_step = self.global_step)
-        self.logger.experiment.add_scalar('train/learned_pert_influence', torch.abs(self.primal_block.learned_pert_influence), global_step = self.global_step)
-        self.logger.experiment.add_scalar('train/mm_sign_influence', torch.abs(self.primal_block.mm_sign_influence), global_step = self.global_step)
         return loss
 
     def validation_step(self, batch, batch_idx, dataset_idx = 0):

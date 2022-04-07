@@ -23,9 +23,8 @@ class PrimalMetrics(Metric):
         self.add_state('max_round', default = torch.zeros(1, dtype=torch.int32), dist_reduce_fx="max")
         self.add_state('initial_lb_sums', default = torch.zeros(1, dtype=torch.float32), dist_reduce_fx="sum")
 
-    def compute_per_instance_lb(self, batch, per_bdd_lb):
-        # First get rid of standardization.
-        per_instance_lb = scatter_sum(per_bdd_lb, batch.batch_index_con) * batch.var_cost_std + batch.var_cost_mean
+    def compute_per_instance_lb(self, batch, per_bdd_lb, norm):
+        per_instance_lb = scatter_sum(per_bdd_lb, batch.batch_index_con) * norm
         # Account for normalization during BDD conversion.
         per_instance_lb = per_instance_lb / batch.obj_multiplier.to(per_instance_lb.device) + batch.obj_offset.to(per_instance_lb.device)
         return per_instance_lb
@@ -40,7 +39,7 @@ class PrimalMetrics(Metric):
             orig_obj_vector = batch.objective.to(device)
             obj_multipliers = batch.obj_multiplier
             obj_offsets = batch.obj_offset
-            initial_per_instance_lb = self.compute_per_instance_lb(batch, batch.con_lp_f[:, self.con_lp_f_names.index('orig_lb')])
+            initial_per_instance_lb = self.compute_per_instance_lb(batch, batch.con_lp_f[:, self.con_lp_f_names.index('orig_lb')], batch.orig_norm)
             self.initial_lb_sums += initial_per_instance_lb.sum() 
 
             for logs_round in logs:
@@ -49,7 +48,7 @@ class PrimalMetrics(Metric):
                     self.loss[round] += logs_round['loss']
                 self.max_round[0] = max(self.max_round[0].item(), round)
                 if not self.on_baseline:
-                    per_instance_lb = self.compute_per_instance_lb(batch, logs_round['prev_lb'].to(device))
+                    per_instance_lb = self.compute_per_instance_lb(batch, logs_round['prev_lb'].to(device), logs_round['norm'])
                     self.pred_lb_sums[round] = self.pred_lb_sums[round] + per_instance_lb.sum()
                 mm_pred_edge = logs_round['all_mm_diff'].to(device)
                 mm_pred_sign = torch.sign(mm_pred_edge)

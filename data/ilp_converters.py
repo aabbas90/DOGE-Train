@@ -38,10 +38,10 @@ def create_normalized_bdd_instance(ilp_path):
     objs = []
     var_names = []
     for var in variables:
-    # GM can contain continuous variables even though they will ultimately have binary value. TODOAA.
-        if (var.VType != 'B'): #, f'Variable {var} is not binary in file {ilp_path} and instead of type {var.VType}'
-            print(f'Non-binary variable.')
-            return None, None, None
+        # GM can contain continuous variables even though they will ultimately have binary value. TODOAA.
+        # if (var.VType != 'B'): #, f'Variable {var} is not binary in file {ilp_path} and instead of type {var.VType}'
+        #     print(f'Non-binary variable.')
+        #     return None, None, None
         objs.append(var.Obj)
         var_names.append(var.VarName) 
 

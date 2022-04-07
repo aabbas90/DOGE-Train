@@ -38,21 +38,22 @@ cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'deg']
 cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_dist_weights']
 cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'dist_weights']
 
-cfg.TRAIN.MAX_NUM_EPOCHS = 100
-cfg.TRAIN.BATCH_SIZE = 1
+cfg.TRAIN.USE_RELATIVE_GAP_LOSS = True
+cfg.TRAIN.MAX_NUM_EPOCHS = 250
+cfg.TRAIN.BATCH_SIZE = 12
 
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['MIPLIB_TRAIN', 'MIPLIB_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]
-cfg.DATA.MIPLIB_TRAIN_PARAMS = CN({'files_to_load': ['3.lp'], 'root_dir': '/home/ahabbas/data/learnDBCA/miplib_crops/easy', 'read_dual_converged' : True, 'need_gt': True, 'need_ilp_gt': False}) 
-cfg.DATA.MIPLIB_VAL_PARAMS = CN({'files_to_load': ['1.lp', '2.lp', '3.lp'], 'root_dir': '/home/ahabbas/data/learnDBCA/miplib_crops/easy/', 'read_dual_converged' : True, 'need_gt': True, 'need_ilp_gt': False})
+cfg.DATA.MIPLIB_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/miplib_crops/easy/', 'read_dual_converged' : False, 'need_gt': True, 'need_ilp_gt': False}) 
+cfg.DATA.MIPLIB_VAL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/miplib_crops/easy/', 'read_dual_converged' : False, 'need_gt': True, 'need_ilp_gt': False})
 
 cfg.TRAIN.NUM_ROUNDS = 30
 
 cfg.TEST.NUM_ROUNDS = 10
-cfg.TEST.NUM_DUAL_ITERATIONS = 1000
+cfg.TEST.NUM_DUAL_ITERATIONS = 20
 cfg.TEST.BATCH_SIZE = 1
-cfg.TEST.VAL_PERIOD = 10 # Validate after every n epoch (can be less than 1).
+cfg.TEST.VAL_PERIOD = 20 # Validate after every n epoch (can be less than 1).
 
 test_datasets, test_params = get_all_lp_instances('/home/ahabbas/data/learnDBCA/miplib/hard/', 'miplib_hard', None, False)
 cfg.TEST.DATA.DATASETS = [] #test_datasets

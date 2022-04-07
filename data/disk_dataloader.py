@@ -5,7 +5,7 @@ from data.ilp_converters import create_bdd_repr_from_ilp, create_graph_from_bdd_
 from data.gt_generator import generate_gt_gurobi
 
 class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
-    def __init__(self, data_root_dir, files_to_load, read_dual_converged, need_gt, need_ilp_gt, need_bdd_constraint_features):
+    def __init__(self, data_root_dir, files_to_load, read_dual_converged, need_gt, need_ilp_gt, need_bdd_constraint_features, skip_dual_solved = False):
         super().__init__(root=None, transform=None, pre_transform=None)
         self.data_root_dir = data_root_dir
         self.files_to_load = files_to_load
@@ -13,10 +13,11 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
         self.need_gt = need_gt
         self.need_ilp_gt = need_ilp_gt
         self.need_bdd_constraint_features = need_bdd_constraint_features
+        self.skip_dual_solved = skip_dual_solved
         self.process_custom()
 
     @classmethod
-    def from_config(cls, cfg, data_name, con_features):
+    def from_config(cls, cfg, data_name, con_features, skip_dual_solved):
         params = cfg.DATA[data_name + '_PARAMS']
         data_root_dir = params.root_dir
         files_to_load = params.files_to_load
@@ -34,21 +35,31 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
             read_dual_converged = read_dual_converged,
             need_gt = need_gt,
             need_ilp_gt = need_ilp_gt,
-            need_bdd_constraint_features = need_bdd_constraint_features)
+            need_bdd_constraint_features = need_bdd_constraint_features,
+            skip_dual_solved = skip_dual_solved)
 
     def process_custom(self):
         self.file_list = []
         for path, subdirs, files in os.walk(self.data_root_dir):
             for instance_name in sorted(files):
-                if not instance_name.endswith('.lp') or 'nan' in instance_name or 'normalized' in instance_name or 'slow_bdd' in instance_name or 'error_bdd' in instance_name or '_one_con' in instance_name:
+                if not instance_name.endswith('.lp') or 'nan' in instance_name or 'normalized' in instance_name or 'slow_bdd' in instance_name or '_one_con' in instance_name or 'oom' in instance_name:
                     continue
-
+                    
                 instance_path = os.path.join(path, instance_name)
+                if 'error_bdd' in instance_name:
+                    instance_name = instance_name.replace('_error_bdd.lp', '.lp')
+                    os.rename(instance_path, os.path.join(path, instance_name))
+                    instance_path = os.path.join(path, instance_name)
+                sol_name = instance_name.replace('.lp', '.pkl')
+                if 'dual_solved' in instance_name:
+                    if self.skip_dual_solved:
+                        continue
+                    sol_name = sol_name.replace('_dual_solved', '')
+
                 if len(self.files_to_load) > 0 and instance_name not in self.files_to_load:
                     continue
 
-                sol_path = os.path.join(path.replace('instances', 'solutions'), 
-                                        instance_name.replace('.lp', '.pkl'))
+                sol_path = os.path.join(path.replace('instances', 'solutions'), sol_name)
                 if not os.path.exists(sol_path):
                     os.makedirs(os.path.dirname(sol_path), exist_ok=True)
                     empty_sol = {'time': None, 'obj': None, 'sol_dict': None, 'sol': None}
@@ -67,6 +78,9 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
 
                 bdd_repr_path = instance_path.replace('.lp', '_bdd_repr.pkl')
                 bdd_repr_conv_path = instance_path.replace('.lp', '_bdd_repr_dual_converged.pkl')
+                if 'dual_solved' in instance_name:
+                    bdd_repr_path = bdd_repr_path.replace('_dual_solved', '')
+                    bdd_repr_conv_path = bdd_repr_path.replace('_dual_solved', '')
                 if not os.path.exists(bdd_repr_path):
                     print(f'Creating BDD repr of instance: {instance_path}')
                     bdd_repr, gt_info = create_bdd_repr_from_ilp(instance_path, gt_info, self.need_bdd_constraint_features)
@@ -75,7 +89,7 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                         os.rename(instance_path, os.path.join(path, instance_name.replace('.lp', '_error_bdd.lp')))
                         continue
                     print(f'Saving bdd_repr: {bdd_repr_path}')
-                    pickle.dump(bdd_repr, open(bdd_repr_path, "wb"))
+                    pickle.dump(bdd_repr, open(bdd_repr_path, "wb"), protocol = pickle.HIGHEST_PROTOCOL)
                     pickle.dump(gt_info, open(sol_path, "wb"))
                 if self.read_dual_converged:
                     if not os.path.exists(bdd_repr_conv_path):
@@ -83,7 +97,7 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                         print(f'Solving BDD dual of instance: {instance_path}')
                         bdd_repr = solve_dual_bdd(bdd_repr, 1e-6, 20000, 0.5)
                         print(f'Saving converged bdd_repr: {bdd_repr_conv_path}')
-                        pickle.dump(bdd_repr, open(bdd_repr_conv_path, "wb"))
+                        pickle.dump(bdd_repr, open(bdd_repr_conv_path, "wb"), protocol = pickle.HIGHEST_PROTOCOL)
                     bdd_repr_path = bdd_repr_conv_path # Read dual converged instead.
                 self.file_list.append({'instance_path': instance_path, 
                                     'bdd_repr_path': bdd_repr_path,

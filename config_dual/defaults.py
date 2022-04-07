@@ -28,7 +28,6 @@ cfg.DEVICE = 'gpu'
 cfg.MODEL = CN()
 cfg.MODEL.FULL_COORDINATE_ASCENT = False
 cfg.MODEL.PREDICT_OMEGA = False
-cfg.MODEL.SKIP_CONNECTIONS = False
 cfg.MODEL.VAR_FEATURE_DIM = 16
 cfg.MODEL.CON_FEATURE_DIM = 16
 cfg.MODEL.EDGE_FEATURE_DIM = 8
@@ -37,13 +36,14 @@ cfg.MODEL.DUAL_PRED_DEPTH = 1
 cfg.MODEL.CKPT_PATH = None
 cfg.MODEL.OMEGA_INITIAL = 0.5
 cfg.MODEL.USE_LAYER_NORM = True
-
 cfg.MODEL.VAR_LP_FEATURES = ['obj', 'deg']
 cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg']
-cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg']
-cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'coeff', 'prev_dist_weights']
-cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'coeff', 'dist_weights']
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb'] # 'round_index',
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb'] #'round_index',
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'coeff', 'dist_weights', 'prev_sol', 'omega'] #, 'grad_dist_weights', 'grad_omega']
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'coeff', 'dist_weights', 'prev_sol', 'omega'] #, 'grad_dist_weights', 'grad_omega']
+cfg.MODEL.NUM_HIDDEN_LAYERS_EDGE = 0
+cfg.MODEL.USE_NET_SOLVER_COSTS = False
 
 cfg.DATA = CN()
 
@@ -66,6 +66,7 @@ cfg.TRAIN.BASE_LR = 1e-4
 cfg.TRAIN.BATCH_SIZE = 8
 cfg.TRAIN.MAX_NUM_EPOCHS = 300
 cfg.TRAIN.OPTIMIZER = "Adam"
+cfg.TRAIN.USE_RELATIVE_GAP_LOSS = False
 
 cfg.TRAIN.NUM_ROUNDS = 1 # Max. possible number of dual iteration rounds.
 cfg.TRAIN.NUM_ROUNDS_WITH_GRAD = 1 # Number of rounds in which gradients are backpropagated.

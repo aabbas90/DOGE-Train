@@ -1,6 +1,6 @@
 import torch
 import pickle
-from torch_scatter import scatter_sum, scatter_softmax, scatter_mean, scatter_add, scatter_std
+from torch_scatter import scatter_sum, scatter_softmax, scatter_mean, scatter_add, scatter_std, scatter_max
 import bdd_cuda_torch
 import numpy as np
 
@@ -11,7 +11,8 @@ def set_features(f_name, feature_names_to_use, feature_tensor, feature_vector):
     return feature_tensor
 
 def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, con_lp_f_names, edge_lp_f_names, 
-                            num_iterations = 0, improvement_slope = 1e-6, omega = 0.5, distribute_delta = False):
+                            num_iterations = 0, improvement_slope = 1e-6, omega = 0.5, distribute_delta = False, 
+                            num_grad_iterations_dual_features = 0):
     batch.edge_index_var_con = batch.edge_index_var_con.to(device) 
     batch.batch_index_var = batch.objective_batch.to(device) # var batch assignment
     batch.batch_index_con = batch.rhs_vector_batch.to(device) # con batch assignment
@@ -23,26 +24,34 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     hi_costs_out = torch.empty_like(lo_costs_out)
     def_mm_out = torch.empty_like(lo_costs_out)
     solvers = []
-    initial_lbs = []
     layer_start = 0
     for b in range(len(batch.solver_data)):
         solver = pickle.loads(batch.solver_data[b])
         batch.solver_data[b] = None # Free-up the memory.
         # Run non learned solver for num_iterations e.g. to take it to states where optimization becomes difficult.
-        solver.non_learned_iterations(omega, num_iterations, improvement_slope)
-        if distribute_delta:
-            solver.distribute_delta()
-        initial_lbs.append(solver.lower_bound())
         solver.get_solver_costs(lo_costs_out[layer_start].data_ptr(), hi_costs_out[layer_start].data_ptr(), def_mm_out[layer_start].data_ptr())
         layer_start += solver.nr_layers()
         solvers.append(solver)
 
-    assert(layer_start == lo_costs_out.shape[0])
-
     solver_state = {'lo_costs': lo_costs_out, 'hi_costs': hi_costs_out, 'def_mm': def_mm_out}
+    prev_per_bdd_lb = compute_per_bdd_lower_bound(solvers, solver_state)
+    prev_per_bdd_sol = compute_per_bdd_solution(solvers, solver_state)
+
+    initial_lbs = []
+    layer_start = 0
+    for solver in solvers:
+        solver.non_learned_iterations(omega, num_iterations, improvement_slope)
+        if distribute_delta:
+            solver.distribute_delta()
+        solver.get_solver_costs(lo_costs_out[layer_start].data_ptr(), hi_costs_out[layer_start].data_ptr(), def_mm_out[layer_start].data_ptr())
+        layer_start += solver.nr_layers()
+        initial_lbs.append(solver.lower_bound())
+
+    assert layer_start == lo_costs_out.shape[0]
+    solver_state = {'lo_costs': lo_costs_out, 'hi_costs': hi_costs_out, 'def_mm': def_mm_out}
+    dist_weights = normalize_distribution_weights(torch.ones_like(lo_costs_out), batch.edge_index_var_con)
     per_bdd_lb = compute_per_bdd_lower_bound(solvers, solver_state)
     per_bdd_sol = compute_per_bdd_solution(solvers, solver_state)
-    dist_weights = normalize_distribution_weights(torch.ones_like(lo_costs_out), batch.edge_index_var_con)
     valid_edge_mask_list = get_valid_edge_mask(batch.edge_index_var_con, solvers)
     if gt_solution_type is not None:
         gt_sol_var, gt_sol_edge = get_valid_target_solution_edge(solvers, batch.num_vars, batch.edge_index_var_con[0], batch.gt_info, valid_edge_mask_list, gt_solution_type)
@@ -51,12 +60,14 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
         gt_sol_edge = None
     valid_edge_mask = torch.cat(valid_edge_mask_list, 0)
     batch.valid_edge_mask = valid_edge_mask
+    solver_state['def_mm'][~batch.valid_edge_mask] = 0 # Locations of terminal nodes can contain nans.
     batch.gt_sol_edge = gt_sol_edge
     batch.gt_sol_var = gt_sol_var
     batch.initial_lbs = initial_lbs
     batch.solver_state = solver_state
     batch.solvers = solvers
     mm_diff = compute_all_min_marginal_diff(solvers, solver_state)
+    mm_diff[~batch.valid_edge_mask] = 0
     try:
         assert(torch.all(torch.isfinite(solver_state['lo_costs'])))
         assert(torch.all(torch.isfinite(solver_state['hi_costs'])))
@@ -64,6 +75,11 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
         assert(torch.all(torch.isfinite(mm_diff)))
     except:
         breakpoint()
+
+    # Gradient features:
+    if num_grad_iterations_dual_features > 0:
+        omega_vec = torch.zeros_like(per_bdd_sol) + omega
+        dist_weights_grad, omega_vec_grad = populate_grad_features_dual(solvers, solver_state, dist_weights, omega_vec, num_grad_iterations_dual_features, batch.batch_index_con)
 
     # Variable LP features:
     var_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[0])
@@ -78,24 +94,40 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     batch.con_lp_f = set_features('deg', con_lp_f_names, batch.con_lp_f, con_degree)
     batch.con_lp_f = set_features('rhs', con_lp_f_names, batch.con_lp_f, batch.rhs_vector.to(device))
     batch.con_lp_f = set_features('lb', con_lp_f_names, batch.con_lp_f, per_bdd_lb)
+    batch.con_lp_f = set_features('prev_lb', con_lp_f_names, batch.con_lp_f, prev_per_bdd_lb)
     batch.con_lp_f = set_features('con_type', con_lp_f_names, batch.con_lp_f, batch.con_type.to(device))
     
     # Edge LP features:
     batch.edge_rest_lp_f = torch.zeros((torch.numel(dist_weights), len(edge_lp_f_names)), device = device, dtype = torch.float32)
     batch.edge_rest_lp_f = set_features('sol', edge_lp_f_names, batch.edge_rest_lp_f, per_bdd_sol)
+    batch.edge_rest_lp_f = set_features('prev_sol', edge_lp_f_names, batch.edge_rest_lp_f, prev_per_bdd_sol)
     batch.edge_rest_lp_f = set_features('dist_weights', edge_lp_f_names, batch.edge_rest_lp_f, dist_weights)
     batch.edge_rest_lp_f = set_features('mm_diff', edge_lp_f_names, batch.edge_rest_lp_f, mm_diff)
     batch.edge_rest_lp_f = set_features('coeff', edge_lp_f_names, batch.edge_rest_lp_f, batch.con_coeff.to(device))
+    batch.edge_rest_lp_f = set_features('omega', edge_lp_f_names, batch.edge_rest_lp_f, torch.zeros_like(per_bdd_sol) + omega)
+    if num_grad_iterations_dual_features > 0:
+        batch.edge_rest_lp_f = set_features('grad_dist_weights', edge_lp_f_names, batch.edge_rest_lp_f, dist_weights_grad)
+        batch.edge_rest_lp_f = set_features('grad_omega', edge_lp_f_names, batch.edge_rest_lp_f, omega_vec_grad)
     return batch, dist_weights
 
-def normalize_costs_var(var_costs, lb_per_bdd, mm_diff, num_bdds_per_inst, batch_index_var, batch_index_con, batch_index_edge):
-    m = scatter_mean(var_costs, batch_index_var)
-    std = scatter_std(var_costs, batch_index_var) + 1e-8
-    var_costs = (var_costs - m[batch_index_var]) / (std[batch_index_var])
-    mean_per_bdd = m / num_bdds_per_inst
-    lb_per_bdd = (lb_per_bdd - mean_per_bdd[batch_index_con]) / (std[batch_index_con])
-    mm_diff = mm_diff / (std[batch_index_edge])
-    return var_costs, lb_per_bdd, mm_diff, m, std
+def compute_normalized_solver_costs_for_primal(solver_state, mm_diff, lb, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge, norm_type = 'inf'):
+    net_edge_cost = solver_state['hi_costs'] - solver_state['lo_costs']
+    net_var_cost = scatter_sum(net_edge_cost, edge_index_var_con[0])
+    if norm_type == 'l2':
+        norm = scatter_sum(torch.square(net_var_cost), batch_index_var)
+    elif norm_type == 'inf':
+        norm = scatter_max(torch.abs(net_var_cost), batch_index_var)[0]
+    else:
+        assert False, f'norm: {norm_type} unknown'
+    norm = norm + 1e-9
+    net_var_cost = net_var_cost / norm[batch_index_var]
+    norm_con = norm[batch_index_con]
+    constant_per_bdd = scatter_sum(solver_state['lo_costs'], edge_index_var_con[1]) / norm_con
+    lb = lb / norm_con
+    norm_edge = norm[batch_index_edge]
+    mm_diff = mm_diff / norm_edge
+    net_edge_cost = net_edge_cost / norm_edge
+    return net_var_cost, net_edge_cost, mm_diff, lb, constant_per_bdd, norm
 
 def non_learned_iterations(solvers, solver_state, num_iterations = 0, improvement_slope = 1e-6, omega = 0.5):
     layer_start = 0
@@ -110,13 +142,17 @@ def non_learned_iterations(solvers, solver_state, num_iterations = 0, improvemen
         layer_start += solver.nr_layers()
     return solvers, solver_state
 
-def non_learned_updates(batch, num_iterations = 0, improvement_slope = 1e-6, omega = 0.5):
+def non_learned_updates(batch, edge_lp_f_names, num_iterations = 0, improvement_slope = 1e-6, omega = 0.5):
     batch.solvers, batch.solver_state = non_learned_iterations(batch.solvers, batch.solver_state, num_iterations, improvement_slope, omega)
     # Update lower bounds:
     batch.con_lp_f[:, 0] = compute_per_bdd_lower_bound(batch.solvers, batch.solver_state) 
     # Update LP feature information so that GNN can be run afterwards.
-    batch.edge_rest_lp_f[:, 0] = compute_per_bdd_solution(batch.solvers, batch.solver_state)
-    batch.edge_rest_lp_f[:, 2] = normalize_distribution_weights(torch.ones_like(batch.solver_state['lo_costs']), batch.edge_index_var_con)
+    per_bdd_sol = compute_per_bdd_solution(batch.solvers, batch.solver_state)
+    dist_weights = normalize_distribution_weights(torch.ones_like(batch.solver_state['lo_costs']), batch.edge_index_var_con)
+
+    batch.edge_rest_lp_f = set_features('sol', edge_lp_f_names, batch.edge_rest_lp_f, per_bdd_sol)
+    batch.edge_rest_lp_f = set_features('prev_dist_weights', edge_lp_f_names, batch.edge_rest_lp_f, dist_weights)
+
     batch.solver_state['def_mm'][~batch.valid_edge_mask] = 0 # Locations of terminal nodes can contain nans.
     return batch
 
@@ -164,12 +200,13 @@ def distribute_delta(solvers, solver_state):
     lo_costs, hi_costs = bdd_cuda_torch.DistributeDeferredDelta.apply(solvers, solver_state['lo_costs'], solver_state['hi_costs'], solver_state['def_mm'])
     return {'lo_costs': lo_costs, 'hi_costs': hi_costs, 'def_mm': torch.zeros_like(solver_state['def_mm'])}
 
-def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, improvement_slope = 1e-6, grad_dual_itr_max_itr = None):
+def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, improvement_slope = 1e-6, grad_dual_itr_max_itr = None, logger = None, filepahts = None, step = None):
     if grad_dual_itr_max_itr is None:
         grad_dual_itr_max_itr = num_iterations
     num_caches = min(int(grad_dual_itr_max_itr / 3), 25)
     lo_costs, hi_costs, def_mm = bdd_cuda_torch.DualIterations.apply(solvers, solver_state['lo_costs'], solver_state['hi_costs'], solver_state['def_mm'], 
-                                                                    dist_weights, num_iterations, omega, grad_dual_itr_max_itr, improvement_slope, num_caches)
+                                                                    dist_weights, num_iterations, omega, grad_dual_itr_max_itr, improvement_slope, num_caches,
+                                                                    logger, filepahts, step)
     solver_state['lo_costs'] = lo_costs
     solver_state['hi_costs'] = hi_costs
     solver_state['def_mm'] = def_mm
@@ -261,3 +298,20 @@ def primal_rounding_non_learned(num_rounds, solvers, norm_solver_state, obj_mult
         #     f'inconsistent min-marg diff.: {var_inconsistent.sum():.0f}')
     return mm_diff, None, logs
 
+
+def populate_grad_features_dual(solvers, solver_state, dist_weights, omega_vec, num_grad_iterations, batch_index_con, logger = None, filepaths = None, step = None):
+    with torch.set_grad_enabled(True):
+        solver_state_g = {'lo_costs': solver_state['lo_costs'].clone().detach(), 
+                        'hi_costs': solver_state['hi_costs'].clone().detach(),
+                        'def_mm': solver_state['def_mm'].clone().detach()}
+        dist_weights_g = dist_weights.clone().detach().requires_grad_(True)
+        dist_weights_g.retain_grad()
+        omega_vec_g = omega_vec.clone().detach().requires_grad_(True)
+        omega_vec_g.retain_grad()
+
+        solver_state_g = dual_iterations(solvers, solver_state_g, dist_weights_g, num_grad_iterations, omega_vec_g, 0.0, num_grad_iterations, logger, filepaths, step)
+        solver_state_g = distribute_delta(solvers, solver_state_g)
+        lb_after_dist = compute_per_bdd_lower_bound(solvers, solver_state_g)
+        loss = -scatter_sum(lb_after_dist, batch_index_con).mean()
+        loss.backward()
+    return dist_weights_g.grad, omega_vec_g.grad

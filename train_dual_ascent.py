@@ -1,6 +1,9 @@
+from ensurepip import version
+from genericpath import isfile
 import os, argparse
 import numpy as np
 import torch
+from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 warnings.filterwarnings("ignore", ".*if you want to see logs for the training epoch.*")
@@ -31,7 +34,19 @@ def get_final_config(args):
     print("Wrote config file at: {}".format(path))
     return cfg, output_dir
 
+def find_ckpt(ckpt_path, OUTPUT_ROOT_DIR):
+    if os.path.isfile(ckpt_path):
+        return ckpt_path
+    versions = os.path.join(OUTPUT_ROOT_DIR, 'default')
+    for folder in os.listdir(versions):
+        possible_path = os.path.join(versions, folder, 'checkpoints/last.ckpt')
+        if os.path.isfile(possible_path):
+            print(f'Found checkpoint: {possible_path}')
+            return possible_path
+    return None
+
 def main(args):
+    print(datetime.now().time())
     cfg, output_dir = get_final_config(args)   
     seed_everything(cfg.SEED)
     gpus = 0
@@ -46,6 +61,8 @@ def main(args):
     ckpt_path = None
     if cfg.MODEL.CKPT_PATH is not None:
         ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.MODEL.CKPT_PATH)
+        ckpt_path = find_ckpt(ckpt_path, cfg.OUTPUT_ROOT_DIR)
+
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
     checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.VAL_PERIOD, save_top_k=1, monitor='val_loss')
     num_sanity_val_steps = 0
@@ -60,9 +77,13 @@ def main(args):
                     resume_from_checkpoint = cfg.MODEL.CKPT_PATH, 
                     num_sanity_val_steps = num_sanity_val_steps, 
                     log_every_n_steps=cfg.LOG_EVERY,
-                    callbacks=[checkpoint_callback])
+                    track_grad_norm=2,
+                    callbacks=[checkpoint_callback],
+                    detect_anomaly = False)
+                    # gradient_clip_val=100.0,
+                    # gradient_clip_algorithm="norm",
 
-    combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
+    combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg, skip_dual_solved = True)
     if ckpt_path is not None:
         print(f'Loading checkpoint and hyperparameters from: {ckpt_path}')
         model = DualAscentBDD.load_from_checkpoint(ckpt_path,
@@ -85,10 +106,11 @@ def main(args):
     if not args.eval_only:
         trainer.fit(model, combined_train_loader, val_loaders)
         model.eval()
-        trainer.test(model, test_dataloaders = test_loaders, ckpt_path = 'best')
+        trainer.test(model, test_dataloaders = test_loaders)
     else:
         model.eval()
         trainer.test(model, test_dataloaders = test_loaders)
+    print(datetime.now().time())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -1,5 +1,5 @@
 import torch
-from torch_scatter.scatter import scatter_add, scatter_mean
+from torch_scatter.scatter import scatter_mean, scatter_sum
 from pytorch_lightning.core.lightning import LightningModule
 from typing import List, Set, Dict, Tuple, Optional
 from torch.optim import Adam
@@ -32,13 +32,15 @@ class DualAscentBDD(LightningModule):
                 num_learned_var_f: int, 
                 num_learned_con_f: int, 
                 num_learned_edge_f: int,
+                num_hidden_layers_edge: int, 
                 feature_extractor_depth: int,
                 dual_predictor_depth: int,
                 optimizer_name: str,
                 start_episodic_training_after_epoch: int,
                 val_fraction: List[int],
                 use_layer_norm: True,
-                skip_connections: Optional[bool] = False,
+                use_net_solver_costs: False,
+                use_rel_gap_loss: Optional[bool] = False,
                 predict_omega: Optional[bool] = False,
                 full_coordinate_ascent: Optional[bool] = False,
                 val_datanames: Optional[List[str]] = None,
@@ -56,6 +58,7 @@ class DualAscentBDD(LightningModule):
                 'dual_improvement_slope_test',
                 'grad_dual_itr_max_itr', 
                 'lr',
+                'use_rel_gap_loss',
                 'use_layer_norm',
                 'omega_initial',
                 'loss_discount_factor',
@@ -69,22 +72,17 @@ class DualAscentBDD(LightningModule):
                 'num_learned_var_f', 
                 'num_learned_con_f', 
                 'num_learned_edge_f',
+                'num_hidden_layers_edge',
                 'feature_extractor_depth', 
                 'dual_predictor_depth', 
                 'optimizer_name',
                 'full_coordinate_ascent',
                 'predict_omega',
+                'use_net_solver_costs',
                 'start_episodic_training_after_epoch',
                 'val_fraction',
                 'val_datanames',
                 'test_datanames')
-
-        self.lp_feature_extractor = FeatureExtractor(
-                        num_var_lp_f = len(var_lp_features), out_var_dim = num_learned_var_f, 
-                        num_con_lp_f = len(con_lp_features), out_con_dim = num_learned_con_f,
-                        num_edge_lp_f = len(edge_lp_features), out_edge_dim = num_learned_edge_f,
-                        depth = feature_extractor_depth, use_layer_norm=use_layer_norm,
-                        skip_connections = skip_connections)
 
         if not full_coordinate_ascent:
             self.dual_block = DualDistWeightsBlock(
@@ -97,7 +95,8 @@ class DualAscentBDD(LightningModule):
                             edge_dim = num_learned_edge_f,
                             use_layer_norm = use_layer_norm,
                             predict_omega = predict_omega,
-                            skip_connections = skip_connections)
+                            num_hidden_layers_edge = num_hidden_layers_edge,
+                            use_net_solver_costs = use_net_solver_costs)
         else:
             self.dual_block = DualFullCoordinateAscent(
                             var_lp_f_names = var_lp_features,
@@ -107,7 +106,8 @@ class DualAscentBDD(LightningModule):
                             var_dim = num_learned_var_f, 
                             con_dim = num_learned_con_f,
                             edge_dim = num_learned_edge_f,
-                            use_layer_norm = use_layer_norm)
+                            use_layer_norm = use_layer_norm,
+                            num_hidden_layers_edge = num_hidden_layers_edge)
 
         self.val_datanames = val_datanames
         self.test_datanames = test_datanames
@@ -140,9 +140,12 @@ class DualAscentBDD(LightningModule):
             var_lp_features_init = cfg.MODEL.VAR_LP_FEATURES_INIT,
             con_lp_features_init = cfg.MODEL.CON_LP_FEATURES_INIT,
             edge_lp_features_init = cfg.MODEL.EDGE_LP_FEATURES_INIT,
+            num_hidden_layers_edge = cfg.MODEL.NUM_HIDDEN_LAYERS_EDGE,
             num_dual_iter_train = cfg.TRAIN.NUM_DUAL_ITERATIONS,
             num_dual_iter_test = num_dual_iter_test,
             use_layer_norm = cfg.MODEL.USE_LAYER_NORM,
+            use_net_solver_costs = cfg.MODEL.USE_NET_SOLVER_COSTS,
+            use_rel_gap_loss = cfg.TRAIN.USE_RELATIVE_GAP_LOSS,
             dual_improvement_slope_train = cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE,
             dual_improvement_slope_test = dual_improvement_slope_test,
             grad_dual_itr_max_itr = cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR,
@@ -162,7 +165,6 @@ class DualAscentBDD(LightningModule):
             test_datanames = test_datanames,
             full_coordinate_ascent = cfg.MODEL.FULL_COORDINATE_ASCENT,
             predict_omega = cfg.MODEL.PREDICT_OMEGA,
-            skip_connections = cfg.MODEL.SKIP_CONNECTIONS,
             non_learned_updates_test = non_learned_updates_test)
 
     def configure_optimizers(self):
@@ -174,8 +176,18 @@ class DualAscentBDD(LightningModule):
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
         gt_type = None # 'lp_stats' TODOAA
         batch, _ = sol_utils.init_solver_and_get_states(batch, device, gt_type,
-                    self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init, 0, 1.0, self.hparams.omega_initial, 
-                    distribute_delta = self.hparams.full_coordinate_ascent)
+                    self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init, self.hparams.num_dual_iter_train, 1.0, self.hparams.omega_initial, 
+                    distribute_delta = self.hparams.full_coordinate_ascent, num_grad_iterations_dual_features = 20)
+        batch.initial_lb_per_instance = scatter_sum(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb')], batch.batch_index_con)
+        if batch.gt_info['lp_stats']['obj'][0] is not None:
+            batch.gt_obj_normalized = (batch.gt_info['lp_stats']['obj'] - batch.obj_offset) * batch.obj_multiplier
+            batch.gt_obj_normalized = batch.gt_obj_normalized.to(device)
+            for (b, fp) in enumerate(batch.file_path):
+                diff = batch.gt_obj_normalized[b] - batch.initial_lb_per_instance[b]
+                try:
+                    assert diff > 1e-6, f"lb difference for file: {fp} = {diff} < 1e-6."
+                except:
+                    breakpoint()
         return batch
 
     def compute_training_start_round(self):
@@ -188,7 +200,9 @@ class DualAscentBDD(LightningModule):
         fraction = fraction * fraction
         mean_start_step = fraction * (self.hparams.num_train_rounds)
         proposed_start_step = np.round(np.random.normal(mean_start_step, 3)).astype(np.int32).item(0)
-        return max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0)
+        proposed_start_step = max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0)
+        self.logger.experiment.add_scalar('train/start_grad_round', proposed_start_step, global_step = self.global_step)
+        return proposed_start_step
 
     def log_metrics(self, metrics_calculator, mode):
         metrics_dict = metrics_calculator.compute()
@@ -220,6 +234,10 @@ class DualAscentBDD(LightningModule):
         self.logger.experiment.flush()
         metrics_calculator.reset()
 
+    def log_grad_norm(self, grad_norm_dict: Dict[str, float]) -> None:
+        self.logger.experiment.add_scalar('train/grad_norm', grad_norm_dict['grad_2.0_norm_total'], global_step = self.global_step)
+        self.logger.experiment.add_scalar('train/progress_percent.', 100 * self.current_epoch / self.trainer.max_epochs, global_step = self.global_step)
+
     def log_dist_weights(self, dist_weights, data_name, edge_index_var_con, itr):
         var_indices = edge_index_var_con[0]
         dist_weights_mean = scatter_mean(dist_weights, var_indices)[var_indices]
@@ -234,6 +252,9 @@ class DualAscentBDD(LightningModule):
         self.logger.experiment.add_histogram(f'{data_name}/omega_vec_mean', omega_vec_mean, global_step = itr)
         omega_vec_variance_per_var = scatter_mean(torch.square(omega_vec - omega_vec_mean[var_indices]), var_indices) / torch.numel(omega_vec)
         self.logger.experiment.add_histogram(f'{data_name}/std_omega_vec', omega_vec_variance_per_var, global_step = itr)
+
+    def on_train_epoch_start(self):
+        self.num_rounds = self.compute_training_start_round() + 1
 
     def training_epoch_end(self, outputs):
         self.log_metrics(self.train_metrics, 'train')
@@ -286,19 +307,29 @@ class DualAscentBDD(LightningModule):
         loss_per_instance = scatter_mean(loss_per_edge, edge_index_batch[valid_edge_mask]) * len(loss_per_edge)
         return loss_per_instance.sum()
 
-    def dual_loss_lb(self, lb_after_dist, batch_index_con):
-        loss_per_instance = scatter_mean(lb_after_dist, batch_index_con) * len(lb_after_dist)
-        return -loss_per_instance.sum()
+    def dual_loss_lb(self, lb_after_dist, batch_index_con, initial_lb_per_instance = None, gt_obj_normalized = None):
+        # Larger ILPs should have more impact on loss. 
+        if not self.hparams.use_rel_gap_loss:
+            return -lb_after_dist.sum()
+        else:
+            if lb_after_dist.requires_grad:
+                assert gt_obj_normalized is not None
+            elif gt_obj_normalized is None:
+                return None
+
+            numer = gt_obj_normalized - scatter_sum(lb_after_dist, batch_index_con)
+            denom = gt_obj_normalized - initial_lb_per_instance
+            rel_gap = 100.0 * torch.square(numer / (1e-4 + denom))  # Focus more on larger gaps so taking square.
+            return rel_gap.sum()
 
     def single_dual_round(self, batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr):
         if not self.hparams.full_coordinate_ascent:
             batch.solver_state, batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f, dist_weights, omega_vec = self.dual_block(
                                                                     batch.solvers, batch.var_lp_f, batch.con_lp_f, 
                                                                     batch.solver_state, batch.edge_rest_lp_f, 
-                                                                    batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f, 
                                                                     batch.omega, batch.edge_index_var_con,
                                                                     num_dual_iterations, grad_dual_itr_max_itr, improvement_slope, batch.valid_edge_mask,
-                                                                    batch.batch_index_edge)
+                                                                    batch.batch_index_var, batch.batch_index_con, batch.batch_index_edge, self.logger.experiment, batch.file_path, self.global_step)
 
             batch.solver_state['def_mm'][~batch.valid_edge_mask] = 0 # Locations of terminal nodes can contain nans.
             try:
@@ -315,13 +346,20 @@ class DualAscentBDD(LightningModule):
         return batch, dist_weights, omega_vec
 
     def dual_rounds(self, batch, num_rounds, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, is_training = False, instance_log_name = None, non_learned_updates = False):
-        print(f'Running: {batch.file_path[0]}')
-        if not non_learned_updates:
-            batch.var_learned_f, batch.con_learned_f, batch.edge_learned_f = self.lp_feature_extractor(batch.var_lp_f, batch.con_lp_f, batch.solver_state, batch.edge_rest_lp_f, batch.edge_index_var_con)
         loss = 0
-        logs = []
+        logs = [{'r' : 0, 'lb_per_instance': scatter_sum(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb')], batch.batch_index_con), 't': time.time()}]
+        gt_obj_normalized = None
+        if 'gt_obj_normalized' in batch.keys:
+            gt_obj_normalized = batch.gt_obj_normalized
+        current_loss = self.dual_loss_lb(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb')], batch.batch_index_con, batch.initial_lb_per_instance, gt_obj_normalized)
+        if current_loss is not None:
+            logs[-1]['loss'] = current_loss.detach()
+        non_grad_lb_per_instance = logs[0]['lb_per_instance']
         for r in range(num_rounds):
-            with torch.set_grad_enabled(r >= num_rounds - self.hparams.num_train_rounds_with_grad and is_training):
+            if 'round_index' in self.hparams.con_lp_features:
+                batch.con_lp_f[:, self.hparams.con_lp_features.index('round_index')] = r
+            grad_enabled = r >= num_rounds - self.hparams.num_train_rounds_with_grad and is_training
+            with torch.set_grad_enabled(grad_enabled):
                 if not non_learned_updates:
                     batch, dist_weights, omega_vec = self.single_dual_round(batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr)
                     if instance_log_name is not None:
@@ -329,20 +367,28 @@ class DualAscentBDD(LightningModule):
                         self.log_omega_vector(omega_vec, instance_log_name, batch.edge_index_var_con, (r + 1) * num_dual_iterations)
                 else:
                     with torch.no_grad():
-                        batch = sol_utils.non_learned_updates(batch, num_dual_iterations, improvement_slope = 0.0, omega = batch.omega.item())
+                        batch = sol_utils.non_learned_updates(batch, self.hparams.edge_lp_features, num_dual_iterations, improvement_slope = 0.0, omega = batch.omega.item())
 
                 solver_state = sol_utils.distribute_delta(batch.solvers, batch.solver_state)
                 lb_after_dist = sol_utils.compute_per_bdd_lower_bound(batch.solvers, solver_state)
-                current_loss = self.dual_loss_lb(lb_after_dist, batch.batch_index_con)
-                logs.append({'r' : r, 'lb_per_bdd': lb_after_dist.detach(), 't': time.time()})
+                current_loss = self.dual_loss_lb(lb_after_dist, batch.batch_index_con, batch.initial_lb_per_instance, gt_obj_normalized)
+                with torch.no_grad():
+                    logs.append({'r' : r + 1, 'lb_per_instance': scatter_sum(lb_after_dist, batch.batch_index_con), 't': time.time()})
                 if current_loss is not None:
                     logs[-1]['loss'] = current_loss.detach()
                     loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r - 1) * current_loss
+            self.logger.experiment.add_scalar('train/dist_weights_edge_mlp_w_mean', self.dual_block.dist_weights_predictor.edge_mlp[2].weight[0].mean(), global_step = self.global_step)
+            self.logger.experiment.add_scalar('train/dist_weights_edge_mlp_w_std', self.dual_block.dist_weights_predictor.edge_mlp[2].weight[0].std(), global_step = self.global_step)
+            if not grad_enabled:
+                non_grad_lb_per_instance = logs[-1]['lb_per_instance']
+
+        if is_training:
+            min_lb_change_per_instance = torch.min(logs[-1]['lb_per_instance'] - non_grad_lb_per_instance)
+            self.logger.experiment.add_scalar('train/min_lb_change_per_instance', min_lb_change_per_instance, global_step = self.global_step)
         return loss, batch, logs
 
     def training_step(self, batch, batch_idx):
-        num_rounds = self.compute_training_start_round() + 1
-        loss, batch, logs = self.dual_rounds(batch, num_rounds, self.hparams.num_dual_iter_train, self.hparams.dual_improvement_slope_train, self.hparams.grad_dual_itr_max_itr, is_training = True)
+        loss, batch, logs = self.dual_rounds(batch, self.num_rounds, self.hparams.num_dual_iter_train, self.hparams.dual_improvement_slope_train, self.hparams.grad_dual_itr_max_itr, is_training = True)
         self.train_metrics.update(batch, logs)
         return loss
 

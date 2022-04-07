@@ -181,8 +181,8 @@ class PrimalActMax(LightningModule):
             var_hi = scatter_mean(hi_assignments.to(torch.float32), batch.edge_index_var_con[0]) >= 1.0 - 1e-6
             var_lo = scatter_mean(lo_assignments.to(torch.float32), batch.edge_index_var_con[0]) >= 1.0 - 1e-6
             var_lo[-1] = True # terminal node.
-            if (var_hi + var_lo).min() >= 1.0 - 1e-6: # Solution found
-                return batch, logs
+            # if (var_hi + var_lo).min() >= 1.0 - 1e-6: # Solution found
+            #     return batch, logs
 
         return batch, logs
 

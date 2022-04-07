@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --mem=200000
 #SBATCH --gres gpu:1
-#SBATCH -t 0-11:59:59
+#SBATCH -t 0-05:59:59
 #SBATCH -o out_primal/slurm/%j.out
 ####SBATCH --signal=SIGUSR1@90
 
@@ -17,11 +17,12 @@ conda activate LearnDBCA
 
 export OMP_NUM_THREADS=16
 
-NUM_DUAL_ITR_TEST=500
-NUM_ROUNDS_TEST=20
 DUAL_IMPROVEMENT_SLOPE_TEST=1e-6
 
-OUTPUT_ROOT_DIR="out_primal/WORMS/nobackup/v2/v1_3_1_16_32_8_1_500_20_True_1e-3_0.0_5_1e-4_5_True_0.1/"
+OUTPUT_ROOT_DIR=${1}
+NUM_DUAL_ITR_TEST=${2}
+NUM_ROUNDS_TEST=${3}
+
 CKPT_REL_PATH="default/version_0/checkpoints/last.ckpt"
 OUT_REL_DIR='test_'${NUM_DUAL_ITR_TEST}_${NUM_ROUNDS_TEST}_${DUAL_IMPROVEMENT_SLOPE_TEST}
 

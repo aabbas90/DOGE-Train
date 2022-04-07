@@ -1,6 +1,7 @@
 import os, argparse
 import numpy as np
 import torch
+from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 warnings.filterwarnings("ignore", ".*if you want to see logs for the training epoch.*")
@@ -32,14 +33,19 @@ def get_final_config(args):
     print("Wrote config file at: {}".format(path))
     return cfg, output_dir
 
-def get_freer_gpu():
-    os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free >tmp')
-    memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
-    if len(memory_available) == 0:
-        return -1
-    return np.argmax(memory_available)
+def find_ckpt(ckpt_path, OUTPUT_ROOT_DIR):
+    if os.path.isfile(ckpt_path):
+        return ckpt_path
+    versions = os.path.join(OUTPUT_ROOT_DIR, 'default')
+    for folder in os.listdir(versions):
+        possible_path = os.path.join(versions, folder, 'checkpoints/last.ckpt')
+        if os.path.isfile(possible_path):
+            print(f'Found checkpoint: {possible_path}')
+            return possible_path
+    return None
 
 def main(args):
+    print(datetime.now().time())
     cfg, output_dir = get_final_config(args)   
     seed_everything(cfg.SEED)
     gpus = 0
@@ -53,7 +59,9 @@ def main(args):
     tb_logger = TensorBoardLogger(output_dir, default_hp_metric=False)
     ckpt_path = None
     if cfg.MODEL.CKPT_PATH is not None:
-        ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR, cfg.MODEL.CKPT_PATH)
+        ckpt_path = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.MODEL.CKPT_PATH)
+        ckpt_path = find_ckpt(ckpt_path, cfg.OUTPUT_ROOT_DIR)
+
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
     checkpoint_callback = ModelCheckpoint(save_last=True, every_n_epochs=cfg.TEST.VAL_PERIOD)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
@@ -65,7 +73,7 @@ def main(args):
                     check_val_every_n_epoch = cfg.TEST.VAL_PERIOD,
                     logger = tb_logger, 
                     resume_from_checkpoint = ckpt_path,
-                    num_sanity_val_steps=-1,
+                    num_sanity_val_steps=0,
                     log_every_n_steps=cfg.LOG_EVERY,
                     callbacks=[checkpoint_callback, lr_monitor],
                     detect_anomaly = False)
@@ -97,6 +105,7 @@ def main(args):
 
     model.eval()
     trainer.test(model, test_dataloaders = test_loaders)
+    print(datetime.now().time())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

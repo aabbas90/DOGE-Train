@@ -3,15 +3,15 @@ from data.random_dataloader import ILPRandomDiskDataset
 from data.disk_dataloader import ILPDiskDataset
 from torch_geometric.loader import DataLoader
 
-def get_ilp_gnn_loaders(cfg):
+def get_ilp_gnn_loaders(cfg, skip_dual_solved = False):
     all_train_datasets = []
     val_loaders = []
     val_datanames = []
     for data_name, val_fraction in zip(cfg.DATA.DATASETS, cfg.DATA.VAL_FRACTION):
         if '_Random' in data_name:
-            full_dataset = ILPRandomDiskDataset.from_config(cfg, data_name, cfg.MODEL.CON_LP_FEATURES)
+            full_dataset = ILPRandomDiskDataset.from_config(cfg, data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved)
         else:
-            full_dataset = ILPDiskDataset.from_config(cfg, data_name, cfg.MODEL.CON_LP_FEATURES)
+            full_dataset = ILPDiskDataset.from_config(cfg, data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved)
 
         val_size = int(val_fraction * len(full_dataset))
         train_size = len(full_dataset) - val_size
@@ -47,9 +47,9 @@ def get_ilp_gnn_loaders(cfg):
     test_data_names = []
     for test_data_name in cfg.TEST.DATA.DATASETS:
         if '_Random' in test_data_name:
-            test_dataset = ILPRandomDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES)
+            test_dataset = ILPRandomDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False)
         else:
-            test_dataset = ILPDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES)
+            test_dataset = ILPDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False)
         test_loaders.append(DataLoader(test_dataset, 
                                 batch_size=1, 
                                 shuffle=False, 

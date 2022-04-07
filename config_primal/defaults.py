@@ -31,14 +31,15 @@ cfg.MODEL.CON_FEATURE_DIM = 16
 cfg.MODEL.EDGE_FEATURE_DIM = 8
 cfg.MODEL.FEATURE_EXTRACTOR_DEPTH = 1
 cfg.MODEL.PRIMAL_PRED_DEPTH = 1
+cfg.MODEL.NUM_HIDDEN_LAYERS_EDGE = 1
 cfg.MODEL.CKPT_PATH = None
 cfg.MODEL.OMEGA = 0.5
 cfg.MODEL.USE_LSTM_VAR = False
 cfg.MODEL.USE_LAYER_NORM = False
 cfg.MODEL.VAR_LP_FEATURES = ['orig_obj', 'deg', 'prev_obj']
 cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg', 'obj']
-cfg.MODEL.CON_LP_FEATURES = ['prev_lb', 'orig_lb', 'rhs', 'con_type', 'deg', 'round_index']
-cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'lb', 'rhs', 'con_type', 'deg', 'round_index']
+cfg.MODEL.CON_LP_FEATURES = ['prev_lb', 'orig_lb', 'rhs', 'con_type', 'deg', 'orig_constant', 'prev_constant']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'lb', 'rhs', 'con_type', 'deg', 'orig_constant', 'orig_constant']
 cfg.MODEL.EDGE_LP_FEATURES = ['prev_sol', 'orig_sol', 'coeff', 'prev_mm_diff', 'orig_mm_diff']
 cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'sol', 'coeff', 'mm_diff', 'mm_diff']
 
@@ -84,6 +85,8 @@ cfg.TRAIN.LOSS_DISCOUNT_FACTOR = 1.0
 cfg.TRAIN.LOSS_MARGIN = 5e-3
 cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 25
 cfg.TRAIN.MIN_PERTURBATION = 1e-2
+cfg.TRAIN.MM_AGR_LOSS_WEIGHT = 0.0
+cfg.TRAIN.MM_TANH_MULT = 1e3
 
 cfg.TEST = CN()
 cfg.TEST.NUM_DUAL_ITERATIONS = 200
