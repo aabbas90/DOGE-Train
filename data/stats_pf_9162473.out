@@ -1,0 +1,55 @@
+Command Line Args:
+Namespace(root_dir='/home/ahabbas/data/learnDBCA/cv_structure_pred/mrf/protein_folding')
+file: train_split/instances/pdb1fmj.lp, Per iteration time: 0.248, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 110914, Num BDD layers: 4144891
+file: train_split/instances/pdb1i24.lp, Per iteration time: 0.232, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 53448, Num BDD layers: 1973820
+file: train_split/instances/pdb1iqc.lp, Per iteration time: 0.227, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 162817, Num BDD layers: 6216554
+file: train_split/instances/pdb1jmx.lp, Per iteration time: 0.225, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 122817, Num BDD layers: 5142307
+file: train_split/instances/pdb1kgn.lp, Per iteration time: 0.224, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 168013, Num BDD layers: 5899622
+file: train_split/instances/pdb1kwh.lp, Per iteration time: 0.245, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 78445, Num BDD layers: 3198956
+file: train_split/instances/pdb1m3y.lp, Per iteration time: 0.252, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 166499, Num BDD layers: 5928550
+file: train_split/instances/pdb1qks.lp, Per iteration time: 0.247, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 138361, Num BDD layers: 5089774
+file: test_split/instances/1CKK.lp  , Per iteration time: 5.214, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 160988, Num BDD layers: 26862798
+file: test_split/instances/1CM1.lp  , Per iteration time: 3.799, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 152618, Num BDD layers: 25587797
+file: test_split/instances/1SY9.lp  , Per iteration time: 6.764, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 145711, Num BDD layers: 29261177
+file: test_split/instances/2BBN.lp  , Per iteration time: 5.384, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 206335, Num BDD layers: 46920805
+file: test_split/instances/2BCX.lp  , Per iteration time: 7.454, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 206360, Num BDD layers: 41983895
+file: test_split/instances/2BE6.lp  , Per iteration time: 5.246, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 150424, Num BDD layers: 21005625
+file: test_split/instances/2F3Y.lp  , Per iteration time: 5.366, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 151080, Num BDD layers: 28058406
+file: test_split/instances/2FOT.lp  , Per iteration time: 4.527, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 152507, Num BDD layers: 28485312
+file: test_split/instances/2HQW.lp  , Per iteration time: 5.207, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 149206, Num BDD layers: 25874554
+file: test_split/instances/2O60.lp  , Per iteration time: 6.643, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 182961, Num BDD layers: 34793804
+file: test_split/instances/3BXL.lp  , Per iteration time: 4.560, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 164886, Num BDD layers: 31606737
+file: test_split/instances/pdb1b25.lp, Per iteration time: 0.266, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 383112, Num BDD layers: 16605607
+file: test_split/instances/pdb1d2e.lp, Per iteration time: 0.259, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 212791, Num BDD layers: 8463512
+
+
+ 		 Sorted stats: 
+file: train_split/instances/pdb1kgn.lp, Per iteration time: 0.224, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 168013, Num BDD layers: 5899622
+file: train_split/instances/pdb1jmx.lp, Per iteration time: 0.225, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 122817, Num BDD layers: 5142307
+file: train_split/instances/pdb1iqc.lp, Per iteration time: 0.227, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 162817, Num BDD layers: 6216554
+file: train_split/instances/pdb1i24.lp, Per iteration time: 0.232, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 53448, Num BDD layers: 1973820
+file: train_split/instances/pdb1kwh.lp, Per iteration time: 0.245, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 78445, Num BDD layers: 3198956
+file: train_split/instances/pdb1qks.lp, Per iteration time: 0.247, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 138361, Num BDD layers: 5089774
+file: train_split/instances/pdb1fmj.lp, Per iteration time: 0.248, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 110914, Num BDD layers: 4144891
+file: train_split/instances/pdb1m3y.lp, Per iteration time: 0.252, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 166499, Num BDD layers: 5928550
+file: test_split/instances/pdb1d2e.lp, Per iteration time: 0.259, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 212791, Num BDD layers: 8463512
+file: test_split/instances/pdb1b25.lp, Per iteration time: 0.266, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 383112, Num BDD layers: 16605607
+file: test_split/instances/1CM1.lp  , Per iteration time: 3.799, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 152618, Num BDD layers: 25587797
+file: test_split/instances/2FOT.lp  , Per iteration time: 4.527, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 152507, Num BDD layers: 28485312
+file: test_split/instances/3BXL.lp  , Per iteration time: 4.560, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 164886, Num BDD layers: 31606737
+file: test_split/instances/2HQW.lp  , Per iteration time: 5.207, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 149206, Num BDD layers: 25874554
+file: test_split/instances/1CKK.lp  , Per iteration time: 5.214, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 160988, Num BDD layers: 26862798
+file: test_split/instances/2BE6.lp  , Per iteration time: 5.246, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 150424, Num BDD layers: 21005625
+file: test_split/instances/2F3Y.lp  , Per iteration time: 5.366, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 151080, Num BDD layers: 28058406
+file: test_split/instances/2BBN.lp  , Per iteration time: 5.384, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 206335, Num BDD layers: 46920805
+file: test_split/instances/2O60.lp  , Per iteration time: 6.643, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 182961, Num BDD layers: 34793804
+file: test_split/instances/1SY9.lp  , Per iteration time: 6.764, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 145711, Num BDD layers: 29261177
+file: test_split/instances/2BCX.lp  , Per iteration time: 7.454, LP obj:         nan, ILP obj: nan, Percent rel. gap: nan, BDD LB: nan, Percent BDD LB gap: nan, Percent BDD Gap Loss: nan, Num cons: 206360, Num BDD layers: 41983895
+cumulative execution time for flush_forward_states is 0 ms
+cumulative execution time for backward_iteration is 307384 ms
+cumulative execution time for flush_backward_states is 0 ms
+cumulative execution time for min_marginals_from_directional_costs is 557686 ms
+cumulative execution time for forward_iteration is 318513 ms
+cumulative execution time for iteration is 625898 ms
+cumulative execution time for backward_run is 6948 ms
+cumulative execution time for lower_bound is 7061 ms

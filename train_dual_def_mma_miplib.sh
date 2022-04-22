@@ -6,7 +6,7 @@
 #SBATCH --mem=200000
 #SBATCH --gres gpu:1
 #SBATCH -t 0-23:59:59
-#SBATCH -o out_dual/slurm/%j_miplib.out
+#SBATCH -o out_dual/slurm_new/%j.out
 ####SBATCH --signal=SIGUSR1@90
 
 # Make conda available:

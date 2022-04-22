@@ -35,13 +35,13 @@ cfg.MODEL.NUM_HIDDEN_LAYERS_EDGE = 1
 cfg.MODEL.CKPT_PATH = None
 cfg.MODEL.OMEGA = 0.5
 cfg.MODEL.USE_LSTM_VAR = False
-cfg.MODEL.USE_LAYER_NORM = False
+cfg.MODEL.USE_LAYER_NORM = True
 cfg.MODEL.VAR_LP_FEATURES = ['orig_obj', 'deg', 'prev_obj']
 cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg', 'obj']
 cfg.MODEL.CON_LP_FEATURES = ['prev_lb', 'orig_lb', 'rhs', 'con_type', 'deg', 'orig_constant', 'prev_constant']
 cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'lb', 'rhs', 'con_type', 'deg', 'orig_constant', 'orig_constant']
-cfg.MODEL.EDGE_LP_FEATURES = ['prev_sol', 'orig_sol', 'coeff', 'prev_mm_diff', 'orig_mm_diff']
-cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'sol', 'coeff', 'mm_diff', 'mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES = ['prev_sol_avg', 'prev_sol', 'orig_sol', 'coeff', 'prev_mm_diff', 'orig_mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['prev_sol_avg', 'sol', 'sol', 'coeff', 'mm_diff', 'mm_diff']
 
 cfg.DATA = CN()
 
@@ -82,7 +82,7 @@ cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 3 # Gradient of dual iterations would be backp
 
 cfg.TRAIN.DUAL_IMPROVEMENT_SLOPE = 1e-6
 cfg.TRAIN.LOSS_DISCOUNT_FACTOR = 1.0
-cfg.TRAIN.LOSS_MARGIN = 5e-3
+cfg.TRAIN.LOSS_MARGIN = 0.0
 cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 25
 cfg.TRAIN.MIN_PERTURBATION = 1e-2
 cfg.TRAIN.MM_AGR_LOSS_WEIGHT = 0.0

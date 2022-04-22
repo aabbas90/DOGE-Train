@@ -5,7 +5,7 @@ cfg = get_cfg_defaults()
 
 cfg.LOG_EVERY = 100
 
-cfg.TRAIN.MAX_NUM_EPOCHS = 500
+cfg.TRAIN.MAX_NUM_EPOCHS = 250
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['GM_WORMS_TRAIN', 'GM_WORMS_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]
@@ -14,7 +14,7 @@ cfg.DATA.GM_WORMS_TRAIN_PARAMS = CN({'files_to_load': WORM_TRAIN, 'root_dir': '/
 #cfg.DATA.GM_WORMS_TRAIN_PARAMS = CN({'files_to_load': ['0.lp'], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/train_split/worm01-16-03-11-1745/', 'read_dual_converged' : True}) 
 cfg.DATA.GM_WORMS_VAL_PARAMS = CN({'files_to_load': ['1.lp', '2.lp'], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/graph-matching/worms/test_split/', 'read_dual_converged' : False}) 
 
-cfg.TRAIN.BATCH_SIZE = 2
+cfg.TRAIN.BATCH_SIZE = 4
 cfg.TRAIN.NUM_ROUNDS = 30
 cfg.TRAIN.BASE_LR = 1e-3
 cfg.TRAIN.USE_RELATIVE_GAP_LOSS = False

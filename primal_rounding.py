@@ -192,7 +192,7 @@ class PrimalRoundingBDD(LightningModule):
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
         batch, dist_weights = sol_utils.init_solver_and_get_states(batch, device, 'ilp_stats', 
                                 self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init,
-                                0, 1.0, self.hparams.omega, distribute_delta = True)
+                                20, 0.0, self.hparams.omega, distribute_deltaa = True, num_grad_iterations_dual_features = 0)
 
         mm_diff = batch.edge_rest_lp_f[:, self.hparams.edge_lp_features_init.index('mm_diff')]
         lb_per_bdd = batch.con_lp_f[:, self.hparams.con_lp_features_init.index('lb')]
@@ -224,8 +224,9 @@ class PrimalRoundingBDD(LightningModule):
         fraction = fraction * fraction
         mean_start_step = fraction * (self.hparams.num_train_rounds)
         proposed_start_step = np.round(np.random.normal(mean_start_step, 3)).astype(np.int32).item(0)
+        proposed_start_step = max(max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0), self.hparams.num_train_rounds_with_grad - 1)
         self.logger.experiment.add_scalar('train/start_grad_round', proposed_start_step, global_step = self.global_step)
-        return max(max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0), self.hparams.num_train_rounds_with_grad - 1)
+        return proposed_start_step
 
     def log_metrics(self, metrics_calculator, mode):
         metrics_dict = metrics_calculator.compute()
@@ -248,6 +249,10 @@ class PrimalRoundingBDD(LightningModule):
                 prev_value = value
         self.logger.experiment.flush()
         metrics_calculator.reset()
+
+    def log_grad_norm(self, grad_norm_dict: Dict[str, float]) -> None:
+        self.logger.experiment.add_scalar('train/grad_norm', grad_norm_dict['grad_2.0_norm_total'], global_step = self.global_step)
+        self.logger.experiment.add_scalar('train/progress_percent.', 100 * self.current_epoch / self.trainer.max_epochs, global_step = self.global_step)
 
     def on_train_epoch_start(self):
         self.num_rounds = self.compute_training_start_round() + 1
@@ -330,13 +335,15 @@ class PrimalRoundingBDD(LightningModule):
                 batch = self.single_primal_round(batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr)
                 all_mm_diff = batch.edge_rest_lp_f[:, self.hparams.edge_lp_features.index('prev_mm_diff')].clone().detach()
                 pert_lb = batch.con_lp_f[:, self.hparams.con_lp_features.index('prev_lb')].clone().detach()
-                # current_loss = (self.loss_on_lb_increase(batch.con_lp_f, batch.batch_index_con) + 
-                #                 self.loss_on_mm_agreement(batch.edge_rest_lp_f, batch.edge_index_var_con[0], batch.valid_edge_mask))
-                current_loss = self.loss_on_lb_increase(batch.con_lp_f, batch.batch_index_con)
-                if self.hparams.mm_agr_loss_weight > 0.0:
-                    current_loss = current_loss + self.loss_on_mm_agreement(batch.edge_rest_lp_f, batch.edge_index_var_con[0], batch.valid_edge_mask)
+                lb_loss = self.loss_on_lb_increase(batch.con_lp_f, batch.batch_index_con)
+                current_loss = lb_loss
                 logs.append({'r' : r, 'all_mm_diff': all_mm_diff.detach(), 'prev_lb': pert_lb.detach(), 'norm': batch.prev_norm.detach()})
+                if self.hparams.mm_agr_loss_weight > 0.0:
+                    mm_loss = self.hparams.mm_agr_loss_weight * self.loss_on_mm_agreement(batch.edge_rest_lp_f, batch.edge_index_var_con[0], batch.valid_edge_mask)
+                    current_loss = current_loss + mm_loss
+                    logs[-1]['mm_loss'] = mm_loss.detach()
                 if current_loss is not None:
+                    logs[-1]['lb_loss'] = lb_loss.detach()
                     logs[-1]['loss'] = current_loss.detach()
                     if self.hparams.loss_discount_factor > 0.0: # Apply loss on all stages including intermediate ones.
                         loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r + 1) * current_loss

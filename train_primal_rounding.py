@@ -74,9 +74,12 @@ def main(args):
                     logger = tb_logger, 
                     resume_from_checkpoint = ckpt_path,
                     num_sanity_val_steps=0,
+                    track_grad_norm=2,
+                    gradient_clip_algorithm="norm",
                     log_every_n_steps=cfg.LOG_EVERY,
                     callbacks=[checkpoint_callback, lr_monitor],
                     detect_anomaly = False)
+                    # gradient_clip_val=100.0,
 
     combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg)
     if ckpt_path is not None:

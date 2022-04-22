@@ -7,25 +7,6 @@ import BDD.bdd_cuda_learned_mma_py as bdd_solver
 import pickle
 import gurobipy as gp
 
-class IndexManager():
-    def __init__(self, feature_names):
-        self.name_to_index = {}
-        self.index_to_name = {}
-        for idx, name in enumerate(feature_names):
-            self.name_to_index[name] = idx
-            self.index_to_name[idx] = name
-
-    def get_index(self, name):
-        col_idx = self.name_to_index[name]
-        return col_idx
-
-    def feature_used(self, name):
-        return name in self.name_to_index
-    
-    @property
-    def num_features(self):
-        return len(self.name_to_index)
-
 def create_normalized_bdd_instance(ilp_path):
     ilp_gurobi = gp.read(ilp_path)
     obj_offset = ilp_gurobi.ObjCon
@@ -87,12 +68,22 @@ def map_solution_order(solution_dict, bdd_ilp_instance):
     assert(sol.min() > - 1)
     return sol
 
-def create_bdd_repr_from_ilp(ilp_path, gt_info, load_constraint_coeffs = False):
-    bdd_ilp_instance, obj_multiplier, obj_offset = create_normalized_bdd_instance(ilp_path)
+def create_bdd_repr(instance_path, gt_info, load_constraint_coeffs = False):
+    if instance_path.endswith('.lp'):
+        bdd_ilp_instance, obj_multiplier, obj_offset = create_normalized_bdd_instance(instance_path)
+        solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs, 1.0)
+    elif instance_path.endswith('.uai'):
+        bdd_ilp_instance = ilp_instance_bbd.read_MRF_UAI(instance_path)
+        objective = bdd_ilp_instance.objective()
+        obj_multiplier = 1.0 / (1e-6 + np.abs(np.array(objective)).max())
+        obj_offset = 0.0
+        solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs, obj_multiplier)
+    else:
+        assert False
+
     if bdd_ilp_instance is None:
         return None, None
 
-    solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs)
     num_vars = solver.nr_primal_variables() + 1 # +1 due to terminal node.
     num_cons = solver.nr_bdds()
     num_layers = solver.nr_layers()
@@ -112,14 +103,14 @@ def create_bdd_repr_from_ilp(ilp_path, gt_info, load_constraint_coeffs = False):
             gt_info[stat]['sol'] = map_solution_order(gt_info[stat]['sol_dict'], bdd_ilp_instance)
             gt_obj = gt_info[stat]['obj']
             computed_obj = np.sum(gt_info[stat]['sol'] * objective[:bdd_ilp_instance.nr_variables()]) / obj_multiplier + obj_offset
-            assert np.abs(computed_obj - gt_obj) < 1e-3, f'GT objectives mismatch for {ilp_path}. GT obj: {gt_obj}, Computed obj: {computed_obj}.'
+            assert np.abs(computed_obj - gt_obj) < 1e-3, f'GT objectives mismatch for {instance_path}. GT obj: {gt_obj}, Computed obj: {computed_obj}.'
 
     assert(objective.shape[0] == num_vars)
 
     if load_constraint_coeffs:
     # Encode constraints as features assuming that constraints are linear:
         assert solver.nr_primal_variables() == bdd_ilp_instance.nr_variables(), f'Found {solver.nr_primal_variables()} variables in solver and {bdd_ilp_instance.nr_variables()} in ILP read by BDD solver.'
-        assert solver.nr_bdds() == bdd_ilp_instance.nr_constraints(), f'Found {solver.nr_bdds()} BDDs in solver and {bdd_ilp_instance.nr_constraints()} constraints in ILP {ilp_path} read by BDD solver.'
+        assert solver.nr_bdds() == bdd_ilp_instance.nr_constraints(), f'Found {solver.nr_bdds()} BDDs in solver and {bdd_ilp_instance.nr_constraints()} constraints in ILP {instance_path} read by BDD solver.'
         try:
             coefficients = solver.constraint_matrix_coeffs(bdd_ilp_instance)
         except:

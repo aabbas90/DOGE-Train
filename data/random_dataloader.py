@@ -2,7 +2,7 @@ import ecole, os
 import torch_geometric
 import pickle
 from tqdm import tqdm
-from data.ilp_converters import create_bdd_repr_from_ilp, create_graph_from_bdd_repr
+from data.ilp_converters import create_bdd_repr, create_graph_from_bdd_repr
 from data.gt_generator import generate_gt_gurobi
 
 def CreateSetCoverGenerator(n_rows, n_cols, density, max_coeff):
@@ -76,7 +76,7 @@ class ILPRandomDiskDataset(torch_geometric.data.InMemoryDataset): #TODOAA: InMem
 
             # Create BDD and save:
             gt_info = {"lp_stats": lp_stats, "ilp_stats": ilp_stats}
-            bdd_repr, gt_info = create_bdd_repr_from_ilp(lp_path, gt_info)
+            bdd_repr, gt_info = create_bdd_repr(lp_path, gt_info)
             pickle.dump(bdd_repr, open(bdd_path, "wb"))
             pickle.dump(gt_info, open(sol_path, "wb"))
 

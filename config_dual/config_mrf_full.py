@@ -9,7 +9,7 @@ cfg.TRAIN.MAX_NUM_EPOCHS = 300
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['MRF_TRAIN', 'MRF_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]
-MRF_TRAIN = ['objseg-349.lp', 'objseg-358.lp', 'objseg-416.lp'] # snail is present two times.
+MRF_TRAIN = ['objseg-349.lp', 'objseg-358.lp', 'objseg-416.lp']
 cfg.DATA.MRF_TRAIN_PARAMS = CN({'files_to_load': MRF_TRAIN, 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/full_inst_mrf/', 'read_dual_converged' : False}) 
 cfg.DATA.MRF_VAL_PARAMS = CN({'files_to_load': ['fourcolors.lp'], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/full_inst_mrf/', 'read_dual_converged' : False}) 
 
