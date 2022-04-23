@@ -208,6 +208,7 @@ class DualAscentBDD(LightningModule):
                     distribute_deltaa = self.hparams.full_coordinate_ascent, num_grad_iterations_dual_features = 0, 
                     compute_history_for_itrs = self.hparams.num_dual_iter_train)
         batch.dist_weights = dist_weights
+        batch.objective_dev = batch.objective.to(device).to(torch.float64)
         batch.initial_lb_per_instance = scatter_sum(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb')], batch.batch_index_con)
         if self.hparams.use_lstm_var:
             batch.var_hidden_states_lstm = {'h': torch.zeros((batch.var_lp_f.shape[0], self.hparams.num_learned_var_f), device = device),
@@ -433,7 +434,7 @@ class DualAscentBDD(LightningModule):
                                                                     batch.omega, batch.edge_index_var_con,
                                                                     num_dual_iterations, grad_dual_itr_max_itr, improvement_slope, batch.valid_edge_mask,
                                                                     batch.batch_index_var, batch.batch_index_con, batch.batch_index_edge, 
-                                                                    self.logger.experiment, batch.file_path, self.global_step,
+                                                                    self.logger.experiment, batch.file_path, self.global_step, batch.objective_dev,
                                                                     batch.var_hidden_states_lstm, batch.dist_weights)
 
             new_solver_state['def_mm'][~batch.valid_edge_mask] = 0 # Locations of terminal nodes can contain nans.
@@ -464,8 +465,9 @@ class DualAscentBDD(LightningModule):
         non_grad_lb_per_instance = logs[0]['lb_per_instance']
         if not is_training and instance_log_name is not None:
             device = batch.solver_state['hi_costs'].device
-            diff = sol_utils.dual_feasbility_check(batch.solvers, batch.solver_state, batch.objective.to(device), batch.num_vars, True)
-            self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', diff, global_step = 0)
+            max_diff, mean_diff = sol_utils.dual_feasbility_check(batch.solvers, batch.solver_state, batch.objective.to(device), batch.num_vars, True)
+            self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', max_diff, global_step = 0)
+            self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check_mean', mean_diff, global_step = 0)
         current_max_lb = np.NINF
         best_solver_state = None
         lb_after_free_update = None
@@ -499,8 +501,9 @@ class DualAscentBDD(LightningModule):
                     loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r - 1) * current_loss
             if not is_training and instance_log_name is not None:
                 device = batch.solver_state['hi_costs'].device
-                diff = sol_utils.dual_feasbility_check(batch.solvers, solver_state, batch.objective.to(device), batch.num_vars)
-                self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', diff, global_step = (r + 1) * num_dual_iterations)
+                max_diff, mean_diff = sol_utils.dual_feasbility_check(batch.solvers, solver_state, batch.objective.to(device), batch.num_vars)
+                self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', max_diff, global_step = (r + 1) * num_dual_iterations)
+                self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check_mean', mean_diff, global_step = (r + 1) * num_dual_iterations)
             if not grad_enabled:
                 non_grad_lb_per_instance = logs[-1]['lb_per_instance']
 

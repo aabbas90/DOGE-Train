@@ -2,7 +2,7 @@ import torch
 from torchmetrics import Metric
 from torch_scatter import scatter_mean
 import numpy as np
-import os
+import os, time
 
 class DualMetrics(Metric):
     def __init__(self, num_rounds, num_dual_iter_per_round, dist_sync_on_step=False):
@@ -62,6 +62,7 @@ class DualMetrics(Metric):
                     if gt_obj is not None and lb_obj_type:
                         self.gt_obj_sums[round] += gt_obj
                         self.rel_gap_sums[round] += (gt_obj - current_lb) / (gt_obj - initial_lbs[b])
+                        # self.rel_gap_clip_sums[round] += max((gt_obj - max_pred_lb) / (gt_obj - initial_lbs[b]), 0.0)
                         self.rel_gap_clip_sums[round] += (gt_obj - max_pred_lb) / (gt_obj - initial_lbs[b])
                         if i == 0:
                             self.num_gt_known[0] += 1
@@ -96,7 +97,7 @@ class DualMetrics(Metric):
         gaps = {}
         gaps_clipped = {}
         time_spent = {}
-        time_acc = 0
+        time_acc = time.time()
         for r in range(num_valid_rounds):
             tag = f'itr_{r * self.num_dual_iter_per_round}_time_{time_spent_mean[r] + time_acc}'
             time_acc += time_spent_mean[r]

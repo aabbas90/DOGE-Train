@@ -41,7 +41,7 @@ class EdgeUpdater(torch.nn.Module):
                         ], 1)
         return self.edge_mlp(out)
 
-def compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, batch_index_con, con_lp_f, con_lp_f_names, norm_type = 'l2'):
+def compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, batch_index_con, con_lp_f, con_lp_f_names, norm_type = 'l2', epsilon = 1e-6, max_v = 1e6):
     net_cost = solver_state['hi_costs'] - solver_state['lo_costs'] + solver_state['def_mm']
     if norm_type == 'l2':
         norm = scatter_sum(torch.square(net_cost), batch_index_edge)
@@ -49,14 +49,16 @@ def compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, bat
         norm = scatter_max(torch.abs(net_cost), batch_index_edge)[0]
     else:
         assert False, f'norm: {norm_type} unknown'
+    norm = norm + 1e-6
+    norm = torch.clamp(norm, max = max_v, min = -max_v)
     # for f_name in con_lp_f_names:
     #     if 'lb' in f_name:
     #         con_lp_f[:, con_lp_f_names.index(f_name)] = con_lp_f[:, con_lp_f_names.index(f_name)] / norm[batch_index_con]
     norm_edge = norm[batch_index_edge]
     norm_cost = net_cost / norm_edge
-    norm_def_mm = solver_state['def_mm'] / (norm_edge + 1e-9)
+    norm_def_mm = solver_state['def_mm'] / norm_edge
     norm_state = {'norm_cost': norm_cost, 'norm_def_mm': norm_def_mm}
-    return norm_state, con_lp_f
+    return norm_state, con_lp_f, norm_edge
 
 class FeatureExtractorLayer(torch.nn.Module):
     def __init__(self, 
@@ -303,6 +305,7 @@ class DualDistWeightsBlock(torch.nn.Module):
         self.predict_omega = predict_omega
         self.free_update = free_update
         self.free_update_loss_weight = free_update_loss_weight
+        self.maintain_feasibility = True
         assert free_update_loss_weight >= 0
         assert free_update_loss_weight <= 1.0
         if free_update_loss_weight > 0:
@@ -330,10 +333,10 @@ class DualDistWeightsBlock(torch.nn.Module):
                 omega, edge_index_var_con,
                 num_dual_iterations, grad_dual_itr_max_itr, dual_improvement_slope, valid_edge_mask, 
                 batch_index_var, batch_index_con, batch_index_edge,
-                logger, filepaths, step, var_hidden_states_lstm = None, dist_weights_isotropic = None):
+                logger, filepaths, step, var_objective, var_hidden_states_lstm = None, dist_weights_isotropic = None):
         
         if self.use_net_solver_costs:
-            net_solver_state, con_lp_f = compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, batch_index_con, con_lp_f, self.con_lp_f_names, 'inf')
+            net_solver_state, con_lp_f, norm_edge = compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, batch_index_con, con_lp_f, self.con_lp_f_names, 'inf')
             var_learned_f, con_learned_f, edge_learned_f = self.feature_extractor(var_lp_f, con_lp_f, net_solver_state, edge_lp_f_wo_ss, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge)
         else:
             var_learned_f, con_learned_f, edge_learned_f = self.feature_extractor(var_lp_f, con_lp_f, solver_state, edge_lp_f_wo_ss, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge)
@@ -372,11 +375,20 @@ class DualDistWeightsBlock(torch.nn.Module):
         if self.free_update:
             update = predictions[:, int(self.predict_dist_weights)] * torch.abs(self.subgradient_step_size.to(var_lp_f.device))
             update = (update - scatter_mean(update.to(torch.float64), edge_index_var_con[0])[edge_index_var_con[0]]).to(torch.float32)
+            # if self.use_net_solver_costs:
+            #     update = norm_edge * update
             try:
                 assert(torch.all(torch.isfinite(update)))
             except:
                 breakpoint()
             solver_state['hi_costs'] = solver_state['hi_costs'] + update
+            if self.maintain_feasibility and not update.requires_grad:
+                solver_state_dd = sol_utils.distribute_delta(solvers, solver_state)
+                net_objective = scatter_sum(solver_state_dd['hi_costs'].to(torch.float64) - solver_state_dd['lo_costs'].to(torch.float64), edge_index_var_con[0]) 
+                objective_diff = var_objective.to(net_objective.device).to(torch.float64) - net_objective
+                counts = scatter_sum(torch.ones_like(solver_state_dd['hi_costs']), edge_index_var_con[0])
+                objective_diff = (objective_diff / counts).to(torch.float32)
+                solver_state['hi_costs'] = solver_state['hi_costs'] + objective_diff[edge_index_var_con[0]]
             if self.free_update_loss_weight > 0 and update.requires_grad:
                 solver_state_dd = sol_utils.distribute_delta(solvers, solver_state)
                 lb_after_dist_free_update = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state_dd)

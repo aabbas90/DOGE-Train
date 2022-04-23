@@ -9,10 +9,10 @@ cfg.TRAIN.MAX_NUM_EPOCHS = 100
 cfg.DATA.NUM_WORKERS = 0
 cfg.DATA.DATASETS = ['PHOTO_M_TRAIN', 'PHOTO_M_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]
-cfg.DATA.PHOTO_M_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/mrf_photo_montage/train_split/', 'read_dual_converged' : False, 'need_gt': False, 'need_ilp_gt': False, 'load_in_memory': True}) 
+cfg.DATA.PHOTO_M_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/mrf_photo_montage/train_split/', 'read_dual_converged' : False, 'need_gt': False, 'need_ilp_gt': False, 'load_in_memory': False}) 
 cfg.DATA.PHOTO_M_VAL_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/mrf_photo_montage/test_split/', 'read_dual_converged' : False, 'need_gt': False, 'need_ilp_gt': False}) 
 
-cfg.TRAIN.BATCH_SIZE = 2
+cfg.TRAIN.BATCH_SIZE = 1
 cfg.TRAIN.NUM_ROUNDS = 30
 cfg.TRAIN.BASE_LR = 1e-3
 cfg.TRAIN.USE_RELATIVE_GAP_LOSS = False

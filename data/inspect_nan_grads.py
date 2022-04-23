@@ -8,8 +8,9 @@ import numpy as np
 
 def print_stats(t, name):
     print(f'{name}') 
-    if (torch.abs(t).max() > 1e6 or torch.any(~torch.isfinite(t))):
-        print(f'\t min={t.min():.3f}, max={t.max():.3f}, mean: {t.mean():.3f}, std: {t.std():.3f}')
+    print(f'\t min={t.min():.3f}, max={t.max():.3f}, mean: {t.mean():.3f}, std: {t.std():.3f}')
+    # if (torch.abs(t).max() > 1e6 or torch.any(~torch.isfinite(t))):
+    #     print(f'\t min={t.min():.3f}, max={t.max():.3f}, mean: {t.mean():.3f}, std: {t.std():.3f}')
 
 def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, improvement_slope = 1e-6, grad_dual_itr_max_itr = None, logger = None, filepahts = None, step = None):
     if grad_dual_itr_max_itr is None:
@@ -38,13 +39,16 @@ for path, subdirs, files in os.walk(root_dir):
         instance_path = os.path.join(path, instance_name)
 
         bdd_repr = pickle.load(open(instance_path, 'rb'))
+
+        ss = bdd_repr['solver_data']
+        ss_path = os.path.join(path, instance_name.replace('.pkl', '.ss'))
         solver = pickle.loads(bdd_repr['solver_data'])
 
         lo_costs = torch.empty((solver.nr_layers()), device = 'cuda', dtype = torch.float32)
         hi_costs = torch.empty_like(lo_costs)
         def_mm = torch.zeros_like(lo_costs)
             
-        omega = torch.ones((solver.nr_layers()), device = 'cuda', dtype = torch.float32) - 0.5
+        omega = torch.ones((solver.nr_layers()), device = 'cuda', dtype = torch.float32) - 0.8
         dist_weights = torch.ones((solver.nr_layers()), device = 'cuda', dtype = torch.float32)
         var_indices = torch.from_numpy(bdd_repr['var_indices']).to(omega.device).to(torch.long)
         con_indices = torch.from_numpy(bdd_repr['con_indices']).to(omega.device).to(torch.long)
@@ -56,6 +60,9 @@ for path, subdirs, files in os.walk(root_dir):
         # hi_costs = hi_costs * 0 + 1
 
         solver.set_solver_costs(lo_costs.data_ptr(), hi_costs.data_ptr(), def_mm.data_ptr())
+        if not os.path.exists(ss_path) or True:
+            solver.export_ss(ss_path)
+
         num_act = solver.iterations(dist_weights.data_ptr(), num_itr, 1.0, 0.0, omega.data_ptr(), True)
         assert num_itr == num_act
 
@@ -67,7 +74,10 @@ for path, subdirs, files in os.walk(root_dir):
         solver.grad_iterations(dist_weights.data_ptr(), grad_lo_costs.data_ptr(), grad_hi_costs.data_ptr(),
                                 grad_def_mm.data_ptr(), grad_dist_weights.data_ptr(), grad_omega.data_ptr(),
                                 1.0, 0, num_itr, omega.data_ptr(), True, 10)
+        print_stats(lo_costs, f"lo_costs of {instance_path}")
+        print_stats(hi_costs, f"hi_costs of {instance_path}")
         print_stats(grad_lo_costs, f"grad_lo_costs of {instance_path}")
+        print_stats(grad_hi_costs, f"grad_hi_costs of {instance_path}")
 
         # large_edges = [ 1075,  2154,  3289,  4394,  5495,  6510,  7581,  8465,  9424, 10033,
         #         10777, 11344, 11847, 12352, 12853, 13354, 13855, 14336, 14490, 14971,

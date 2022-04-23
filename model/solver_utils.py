@@ -363,7 +363,9 @@ def dual_feasbility_check(solvers, solver_state, orig_primal_obj, num_vars_per_i
         solver.get_primal_objective_vector(computed_primal_obj[var_start].data_ptr())
         layer_start += solver.nr_layers()
         var_start = var_end + 1 # To account for terminal node.
-    max_difference = torch.abs(orig_primal_obj - computed_primal_obj).max()
-    # if max_difference > tolerance:
-    #     print(f"dual feasibility check: difference: {max_difference} > {tolerance}")
-    return max_difference
+    diff = torch.abs(orig_primal_obj - computed_primal_obj)
+    max_difference = diff.max()
+    mean_difference = diff.mean()
+    if max_difference > tolerance:
+        print(f"dual feasibility check: difference: {max_difference} > {tolerance}")
+    return max_difference, mean_difference
