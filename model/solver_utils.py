@@ -20,7 +20,7 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     batch.num_cons = batch.num_cons.to(device)
     num_edges = batch.edge_index_var_con.shape[1]
     batch.omega = torch.tensor([omega], device = device)
-    lo_costs_out = torch.empty((num_edges), device = device, dtype = torch.float32)
+    lo_costs_out = torch.empty((num_edges), device = device, dtype = torch.get_default_dtype())
     hi_costs_out = torch.empty_like(lo_costs_out)
     def_mm_out = torch.empty_like(lo_costs_out)
     solvers = []
@@ -81,13 +81,13 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     # Variable LP features:
     var_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[0])
     var_degree[torch.cumsum(batch.num_vars, 0) - 1] = 0 # Terminal nodes, not corresponding to any primal variable.
-    batch.var_lp_f = torch.zeros((torch.numel(batch.objective), len(var_lp_f_names)), device = device, dtype = torch.float32)
+    batch.var_lp_f = torch.zeros((torch.numel(batch.objective), len(var_lp_f_names)), device = device, dtype = torch.get_default_dtype())
     batch.var_lp_f = set_features('obj', var_lp_f_names, batch.var_lp_f, batch.objective.to(device))
     batch.var_lp_f = set_features('deg', var_lp_f_names, batch.var_lp_f, var_degree)
 
     # Constraint LP features:
     con_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[1])
-    batch.con_lp_f = torch.zeros((torch.numel(con_degree), len(con_lp_f_names)), device = device, dtype = torch.float32)
+    batch.con_lp_f = torch.zeros((torch.numel(con_degree), len(con_lp_f_names)), device = device, dtype = torch.get_default_dtype())
     batch.con_lp_f = set_features('deg', con_lp_f_names, batch.con_lp_f, con_degree)
     batch.con_lp_f = set_features('rhs', con_lp_f_names, batch.con_lp_f, batch.rhs_vector.to(device))
     batch.con_lp_f = set_features('lb', con_lp_f_names, batch.con_lp_f, per_bdd_lb)
@@ -105,7 +105,7 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     batch.con_lp_f = set_features('con_type', con_lp_f_names, batch.con_lp_f, batch.con_type.to(device))
     
     # Edge LP features:
-    batch.edge_rest_lp_f = torch.zeros((torch.numel(dist_weights), len(edge_lp_f_names)), device = device, dtype = torch.float32)
+    batch.edge_rest_lp_f = torch.zeros((torch.numel(dist_weights), len(edge_lp_f_names)), device = device, dtype = torch.get_default_dtype())
     batch.edge_rest_lp_f = set_features('sol', edge_lp_f_names, batch.edge_rest_lp_f, per_bdd_sol)
     batch.edge_rest_lp_f = set_features('prev_sol', edge_lp_f_names, batch.edge_rest_lp_f, prev_per_bdd_sol)
     batch.edge_rest_lp_f = set_features('prev_sol_avg', edge_lp_f_names, batch.edge_rest_lp_f, sol_avg)
@@ -174,7 +174,7 @@ def get_valid_target_solution_edge(solvers, num_vars, var_indices, gt_info, vali
     for b in range(len(num_vars)):
         sol = gt_info[solution_type]['sol'][b]
         if sol is not None:
-            current_var_sol = torch.from_numpy(sol).to(torch.float32).to(var_indices.device)
+            current_var_sol = torch.from_numpy(sol).to(torch.get_default_dtype()).to(var_indices.device)
             gt_sol_var.append(current_var_sol)
             current_var_indices = var_indices[layer_start: layer_start + solvers[b].nr_layers()] - var_offset
             current_edge_sol = current_var_sol[current_var_indices]
@@ -232,13 +232,13 @@ def compute_all_min_marginal_diff(solvers, solver_state):
 def normalize_distribution_weights(dist_weights, edge_index_var_con):
 # Normalize distribution weights so that they sum upto 1 for each variable.
     var_indices = edge_index_var_con[0, :]
-    dist_weights_sum = scatter_sum(dist_weights.to(torch.float64), var_indices)[var_indices]
-    return (dist_weights / dist_weights_sum).to(torch.float32)
+    dist_weights_sum = scatter_sum(dist_weights.to(torch.get_default_dtype()), var_indices)[var_indices]
+    return (dist_weights / dist_weights_sum).to(torch.get_default_dtype())
 
 def normalize_distribution_weights_softmax(dist_weights, edge_index_var_con):
     var_indices = edge_index_var_con[0, :]
-    softmax_scores = scatter_softmax(dist_weights.to(torch.float64), var_indices)
-    return softmax_scores.to(torch.float32)
+    softmax_scores = scatter_softmax(dist_weights.to(torch.get_default_dtype()), var_indices)
+    return softmax_scores.to(torch.get_default_dtype())
 
 # def perturb_primal_costs(solvers, lo_costs, hi_costs, primal_perturbation):
 #     primal_pert_lo = torch.relu(-primal_perturbation)
@@ -297,16 +297,16 @@ def primal_rounding_non_learned(num_rounds, solvers, norm_solver_state, obj_mult
 #         lo_assignments = mm_diff > 1e-6
 
 #         undecided_assigments = torch.logical_and(~hi_assignments, ~lo_assignments)
-#         var_hi = scatter_mean(hi_assignments.to(torch.float32), var_indices) >= 1.0 - 1e-6
-#         var_lo = scatter_mean(lo_assignments.to(torch.float32), var_indices) >= 1.0 - 1e-6
+#         var_hi = scatter_mean(hi_assignments.to(torch.get_default_dtype()), var_indices) >= 1.0 - 1e-6
+#         var_lo = scatter_mean(lo_assignments.to(torch.get_default_dtype()), var_indices) >= 1.0 - 1e-6
 #         var_lo[-1] = True # terminal node.
 #         if (var_hi + var_lo).min() >= 1.0 - 1e-6: # Solution found
 #             return mm_diff, var_hi, logs
         
-#         var_undecided = scatter_mean(undecided_assigments.to(torch.float32), var_indices) >= 1.0 - 1e-6
+#         var_undecided = scatter_mean(undecided_assigments.to(torch.get_default_dtype()), var_indices) >= 1.0 - 1e-6
 #         var_inconsistent = torch.logical_and(torch.logical_and(~var_hi, ~var_lo), ~var_undecided)
 
-#         rand_perturbation = 2.0 * current_delta * torch.rand(var_undecided.shape, dtype = torch.float32, device = mm_diff.device) - current_delta
+#         rand_perturbation = 2.0 * current_delta * torch.rand(var_undecided.shape, dtype = torch.get_default_dtype(), device = mm_diff.device) - current_delta
 #         var_undecided_pert = var_undecided * rand_perturbation
 
 #         mm_diff_sum_sign = torch.sign(scatter_sum(mm_diff, var_indices))

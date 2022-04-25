@@ -462,13 +462,15 @@ class DualAscentBDD(LightningModule):
         current_loss = self.dual_loss_lb(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb')], batch.batch_index_con, batch.initial_lb_per_instance, gt_obj_normalized)
         if current_loss is not None:
             logs[-1]['loss'] = current_loss.detach()
-        non_grad_lb_per_instance = logs[0]['lb_per_instance']
-        if not is_training and instance_log_name is not None:
-            device = batch.solver_state['hi_costs'].device
-            max_diff, mean_diff = sol_utils.dual_feasbility_check(batch.solvers, batch.solver_state, batch.objective.to(device), batch.num_vars, True)
-            self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', max_diff, global_step = 0)
-            self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check_mean', mean_diff, global_step = 0)
+        current_non_grad_lb_per_instance = logs[0]['lb_per_instance']
+        initial_lb = current_non_grad_lb_per_instance
+        # if not is_training and instance_log_name is not None:
+        #     device = batch.solver_state['hi_costs'].device
+        #     max_diff, mean_diff = sol_utils.dual_feasbility_check(batch.solvers, batch.solver_state, batch.objective.to(device), batch.num_vars, True)
+        #     self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', max_diff, global_step = 0)
+        #     self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check_mean', mean_diff, global_step = 0)
         current_max_lb = np.NINF
+        initial_lb_change = 0
         best_solver_state = None
         lb_after_free_update = None
         for r in range(num_rounds):
@@ -499,19 +501,31 @@ class DualAscentBDD(LightningModule):
                 if current_loss is not None:
                     logs[-1]['loss'] = current_loss.detach()
                     loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r - 1) * current_loss
-            if not is_training and instance_log_name is not None:
-                device = batch.solver_state['hi_costs'].device
-                max_diff, mean_diff = sol_utils.dual_feasbility_check(batch.solvers, solver_state, batch.objective.to(device), batch.num_vars)
-                self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', max_diff, global_step = (r + 1) * num_dual_iterations)
-                self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check_mean', mean_diff, global_step = (r + 1) * num_dual_iterations)
+            # if not is_training and instance_log_name is not None:
+            #     device = batch.solver_state['hi_costs'].device
+            #     max_diff, mean_diff = sol_utils.dual_feasbility_check(batch.solvers, solver_state, batch.objective.to(device), batch.num_vars)
+            #     self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', max_diff, global_step = (r + 1) * num_dual_iterations)
+            #     self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check_mean', mean_diff, global_step = (r + 1) * num_dual_iterations)
             if not grad_enabled:
-                non_grad_lb_per_instance = logs[-1]['lb_per_instance']
+                lb_prev_round = current_non_grad_lb_per_instance
+                current_non_grad_lb_per_instance = logs[-1]['lb_per_instance']
+                if r == 1:
+                    initial_lb_change = current_non_grad_lb_per_instance - lb_prev_round
+                last_lb_change = current_non_grad_lb_per_instance - lb_prev_round
+                rel_improvement = last_lb_change / (initial_lb_change * 1e-12)
+                if not is_training and (initial_lb > current_non_grad_lb_per_instance or rel_improvement < 1.0):
+                    print(f'\n Early termination. last_lb_change: {last_lb_change}, initial_lb_change: {initial_lb_change}, rel_improvement: {rel_improvement}')
+                    for r_fake in range(r + 1, num_rounds):
+                        logs.append({'r' : r_fake + 1, 'lb_per_instance': logs[-1]['lb_per_instance'], 't': time.time()})
+                        if current_loss is not None:
+                            logs[-1]['loss'] = current_loss.detach()
+                    break
 
         if is_training:
             self.logger.experiment.add_scalar('train/dist_weights_edge_mlp_w_mean', self.dual_block.dist_weights_predictor.edge_mlp[2].weight[0].mean(), global_step = self.global_step)
             self.logger.experiment.add_scalar('train/dist_weights_edge_mlp_w_std', self.dual_block.dist_weights_predictor.edge_mlp[2].weight[0].std(), global_step = self.global_step)
             self.logger.experiment.add_scalar('train/subgradient_step_size', torch.abs(self.dual_block.subgradient_step_size[0]).item(), global_step = self.global_step)
-            min_lb_change_per_instance = torch.min(logs[-1]['lb_per_instance'] - non_grad_lb_per_instance)
+            min_lb_change_per_instance = torch.min(logs[-1]['lb_per_instance'] - current_non_grad_lb_per_instance)
             self.logger.experiment.add_scalar('train/min_lb_change_per_instance', min_lb_change_per_instance, global_step = self.global_step)
         return loss, batch, logs, best_solver_state
 
@@ -552,7 +566,6 @@ class DualAscentBDD(LightningModule):
         batch.solver_state = best_solver_state
         batch.solver_state = sol_utils.distribute_delta(batch.solvers, batch.solver_state)
         self.test_primal(batch, True, data_name, instance_name)
-        best_solver_state_non_learned = None
         if self.non_learned_updates_test:
             # Perform non-learned updates:
             _, batch, logs, _ = self.dual_rounds(orig_batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, 

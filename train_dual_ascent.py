@@ -3,6 +3,7 @@ from genericpath import isfile
 import os, argparse
 import numpy as np
 import torch
+torch.set_default_dtype(torch.float64)
 from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
@@ -89,8 +90,8 @@ def main(args):
                                 check_on_train_epoch_end = True, 
                                 mode = 'max')
     num_sanity_val_steps = 0
-    if args.test_non_learned:
-        num_sanity_val_steps = -1
+    # if args.test_non_learned:
+    #     num_sanity_val_steps = -1
     trainer = Trainer(deterministic=False,  # due to https://github.com/pyg-team/pytorch_geometric/issues/3175#issuecomment-1047886622
                     gpus = gpus,
                     max_epochs = cfg.TRAIN.MAX_NUM_EPOCHS, 
@@ -108,7 +109,7 @@ def main(args):
                     # gradient_clip_algorithm="norm",
 
     combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg, skip_dual_solved = True, test_only = args.eval_only)
-    if os.environ['SLURM_JOB_ID']:
+    if 'SLURM_JOB_ID' in os.environ:
         job_id = os.environ['SLURM_JOB_ID']
         job_file_path = f'out_dual/slurm_new/{job_id}.out'
         if os.path.isfile(job_file_path):

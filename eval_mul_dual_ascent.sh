@@ -13,7 +13,7 @@
 . ~/.bashrc
 eval "$(conda shell.bash hook)"
 # Activate a conda environment:
-conda activate LearnDBCA
+conda activate DevLearnDBCA
 
 export OMP_NUM_THREADS=16
 

@@ -166,10 +166,10 @@ def create_graph_from_bdd_repr(bdd_repr, gt_info, file_path):
     graph = BipartiteVarConDataset(num_vars = bdd_repr['num_vars'], num_cons = bdd_repr['num_cons'], num_layers = bdd_repr['num_layers'],
                                 var_indices = torch.from_numpy(bdd_repr['var_indices']).to(torch.long), 
                                 con_indices = torch.from_numpy(bdd_repr['con_indices']).to(torch.long), 
-                                objective = torch.from_numpy(bdd_repr['objective']).to(torch.float32),
-                                con_coeffs = torch.from_numpy(bdd_repr['coeffs']).to(torch.float32), 
-                                rhs_vector = torch.from_numpy(bdd_repr['rhs_vector']).to(torch.float32),
-                                con_type = torch.from_numpy(bdd_repr['constraint_type']).to(torch.float32),
+                                objective = torch.from_numpy(bdd_repr['objective']).to(torch.get_default_dtype()),
+                                con_coeffs = torch.from_numpy(bdd_repr['coeffs']).to(torch.get_default_dtype()), 
+                                rhs_vector = torch.from_numpy(bdd_repr['rhs_vector']).to(torch.get_default_dtype()),
+                                con_type = torch.from_numpy(bdd_repr['constraint_type']).to(torch.get_default_dtype()),
                                 obj_multiplier = bdd_repr['obj_multiplier'],
                                 obj_offset = bdd_repr['obj_offset'])
 

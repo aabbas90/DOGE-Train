@@ -305,7 +305,7 @@ class DualDistWeightsBlock(torch.nn.Module):
         self.predict_omega = predict_omega
         self.free_update = free_update
         self.free_update_loss_weight = free_update_loss_weight
-        self.maintain_feasibility = True
+        self.maintain_feasibility = False
         assert free_update_loss_weight >= 0
         assert free_update_loss_weight <= 1.0
         if free_update_loss_weight > 0:
@@ -374,7 +374,7 @@ class DualDistWeightsBlock(torch.nn.Module):
         lb_after_dist_free_update = None
         if self.free_update:
             update = predictions[:, int(self.predict_dist_weights)] * torch.abs(self.subgradient_step_size.to(var_lp_f.device))
-            update = (update - scatter_mean(update.to(torch.float64), edge_index_var_con[0])[edge_index_var_con[0]]).to(torch.float32)
+            update = (update - scatter_mean(update.to(torch.float64), edge_index_var_con[0])[edge_index_var_con[0]]).to(torch.get_default_dtype())
             # if self.use_net_solver_costs:
             #     update = norm_edge * update
             try:
@@ -387,7 +387,7 @@ class DualDistWeightsBlock(torch.nn.Module):
                 net_objective = scatter_sum(solver_state_dd['hi_costs'].to(torch.float64) - solver_state_dd['lo_costs'].to(torch.float64), edge_index_var_con[0]) 
                 objective_diff = var_objective.to(net_objective.device).to(torch.float64) - net_objective
                 counts = scatter_sum(torch.ones_like(solver_state_dd['hi_costs']), edge_index_var_con[0])
-                objective_diff = (objective_diff / counts).to(torch.float32)
+                objective_diff = (objective_diff / counts).to(torch.get_default_dtype())
                 solver_state['hi_costs'] = solver_state['hi_costs'] + objective_diff[edge_index_var_con[0]]
             if self.free_update_loss_weight > 0 and update.requires_grad:
                 solver_state_dd = sol_utils.distribute_delta(solvers, solver_state)
