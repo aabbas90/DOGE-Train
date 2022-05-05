@@ -71,13 +71,27 @@ def map_solution_order(solution_dict, bdd_ilp_instance):
 def create_bdd_repr(instance_path, gt_info, load_constraint_coeffs = False):
     if instance_path.endswith('.lp'):
         bdd_ilp_instance, obj_multiplier, obj_offset = create_normalized_bdd_instance(instance_path)
-        solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs, 1.0)
+        if torch.get_default_dtype() == torch.float32:
+            print('solver_type_fp32')
+            solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs, 1.0)
+        elif torch.get_default_dtype() == torch.float64:
+            print('solver_type_fp64')
+            solver = bdd_solver.bdd_cuda_learned_mma_double(bdd_ilp_instance, load_constraint_coeffs, 1.0)
+        else:
+            print(f'Unsupported dtype {torch.get_default_dtype()}.')
     elif instance_path.endswith('.uai'):
         bdd_ilp_instance = ilp_instance_bbd.read_MRF_UAI(instance_path)
         objective = bdd_ilp_instance.objective()
         obj_multiplier = 1.0 / (1e-6 + np.abs(np.array(objective)).max())
         obj_offset = 0.0
-        solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs, obj_multiplier)
+        if torch.get_default_dtype() == torch.float32:
+            print('solver_type_fp32')
+            solver = bdd_solver.bdd_cuda_learned_mma(bdd_ilp_instance, load_constraint_coeffs, obj_multiplier)
+        elif torch.get_default_dtype() == torch.float64:
+            print('solver_type_fp64')
+            solver = bdd_solver.bdd_cuda_learned_mma_double(bdd_ilp_instance, load_constraint_coeffs, obj_multiplier)
+        else:
+            print(f'Unsupported dtype {torch.get_default_dtype()}.')
     else:
         assert False
 

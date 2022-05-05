@@ -5,7 +5,7 @@ cfg = get_cfg_defaults()
 
 cfg.LOG_EVERY = 100
 
-cfg.TRAIN.MAX_NUM_EPOCHS = 100
+cfg.TRAIN.MAX_NUM_EPOCHS = 300
 cfg.DATA.NUM_WORKERS = 0
 cfg.DATA.DATASETS = ['SPP_TRAIN', 'SPP_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]

@@ -1,43 +1,48 @@
 #!/bin/bash
 
-#SBATCH -p gpu20
+#SBATCH -p gpu22
+#SBATCH -w gpu22-a100-01
 #SBATCH --ntasks=16
 #SBATCH --nodes=1
-#SBATCH --mem=200000
+#SBATCH --mem=250000
 #SBATCH --gres gpu:1
 #SBATCH -t 0-23:59:59
 #SBATCH -o out_dual/slurm_new/%j.out
-#SBATCH --mail-type=end          # send email when job ends
+#SBATCH --mail-type=time_limit
+#SBATCH --mail-type=fail
+#SBATCH --mail-type=end
 #SBATCH --mail-user=ahmed.abbas@mpi-inf.mpg.de
-####SBATCH --signal=SIGUSR1@90
+#SBATCH --signal=SIGUSR1@90
 
 # Make conda available:
 . ~/.bashrc_private
 eval "$(conda shell.bash hook)"
 # Activate a conda environment:
-conda activate LearnDBCA
+conda activate LearnDBCA_new
 
+export GRB_LICENSE_FILE=/home/ahabbas/gurobi_gpu22_a100_a01/gurobi.lic
 FEATURE_EXTRACTOR_DEPTH=1
 DUAL_PRED_DEPTH=1
 VAR_FEATURE_DIM=16
 CON_FEATURE_DIM=16
 EDGE_FEATURE_DIM=8
 NUM_ROUNDS_WITH_GRAD=1
-NUM_DUAL_ITR=5
-GRAD_DUAL_ITR_MAX_ITR=5
-PREDICT_OMEGA=False
-NUM_ROUNDS_TRAIN=20
+NUM_DUAL_ITR=1
+GRAD_DUAL_ITR_MAX_ITR=1
+NUM_ROUNDS_TRAIN=100
 BASE_LR=5e-3
 NUM_HIDDEN_LAYERS_EDGE=2
 USE_RELATIVE_GAP_LOSS=False
 USE_NET_SOLVER_COSTS=True
-PREDICT_DIST_WEIGHTS=False
 FREE_UPDATE=True
-FREE_UPDATE_LOSS_WEIGHT=1.0
+PREDICT_OMEGA=True
+PREDICT_DIST_WEIGHTS=True
+FREE_UPDATE_LOSS_WEIGHT=0.9
+DENORM_FREE_UPDATE=False
 
-#--test-non-learned
-python train_dual_ascent.py --config-file config_dual/config_mrf_pf.py \
-    OUT_REL_DIR MRF_PF/nobackup/v_new/v1_${FEATURE_EXTRACTOR_DEPTH}_${DUAL_PRED_DEPTH}_${VAR_FEATURE_DIM}_${CON_FEATURE_DIM}_${EDGE_FEATURE_DIM}_${NUM_ROUNDS_WITH_GRAD}_${NUM_DUAL_ITR}_${GRAD_DUAL_ITR_MAX_ITR}_${NUM_ROUNDS_TRAIN}_${PREDICT_OMEGA}_${PREDICT_DIST_WEIGHTS}_${BASE_LR}_${USE_RELATIVE_GAP_LOSS}_${NUM_HIDDEN_LAYERS_EDGE}_${USE_NET_SOLVER_COSTS}_${FREE_UPDATE}_${FREE_UPDATE_LOSS_WEIGHT} \
+#--eval-only --test-non-learned --only-test-non-learned
+python train_dual_ascent.py --config-file config_dual/config_mrf_pf.py --test-precision-float \
+    OUT_REL_DIR MRF_PF/nobackup/v_new/v3_${FEATURE_EXTRACTOR_DEPTH}_${DUAL_PRED_DEPTH}_${VAR_FEATURE_DIM}_${CON_FEATURE_DIM}_${EDGE_FEATURE_DIM}_${NUM_ROUNDS_WITH_GRAD}_${NUM_DUAL_ITR}_${GRAD_DUAL_ITR_MAX_ITR}_${NUM_ROUNDS_TRAIN}_${PREDICT_OMEGA}_${PREDICT_DIST_WEIGHTS}_${BASE_LR}_${USE_RELATIVE_GAP_LOSS}_${NUM_HIDDEN_LAYERS_EDGE}_${USE_NET_SOLVER_COSTS}_${FREE_UPDATE}_${FREE_UPDATE_LOSS_WEIGHT}_${DENORM_FREE_UPDATE} \
     MODEL.FEATURE_EXTRACTOR_DEPTH ${FEATURE_EXTRACTOR_DEPTH} \
     TRAIN.BASE_LR ${BASE_LR} \
     TRAIN.USE_RELATIVE_GAP_LOSS ${USE_RELATIVE_GAP_LOSS} \
@@ -54,6 +59,6 @@ python train_dual_ascent.py --config-file config_dual/config_mrf_pf.py \
     TRAIN.NUM_ROUNDS ${NUM_ROUNDS_TRAIN} \
     MODEL.USE_NET_SOLVER_COSTS ${USE_NET_SOLVER_COSTS} \
     MODEL.FREE_UPDATE ${FREE_UPDATE} \
-    TRAIN.FREE_UPDATE_LOSS_WEIGHT ${FREE_UPDATE_LOSS_WEIGHT}
-
+    TRAIN.FREE_UPDATE_LOSS_WEIGHT ${FREE_UPDATE_LOSS_WEIGHT} \
+    MODEL.DENORM_FREE_UPDATE ${DENORM_FREE_UPDATE}
 exit 0

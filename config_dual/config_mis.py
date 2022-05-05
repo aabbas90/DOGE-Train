@@ -4,8 +4,12 @@ from config_dual.defaults import get_cfg_defaults, get_all_lp_instances
 cfg = get_cfg_defaults()
 
 cfg.LOG_EVERY = 100
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff'] 
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff']
 
-cfg.TRAIN.MAX_NUM_EPOCHS = 50
+cfg.TRAIN.MAX_NUM_EPOCHS = 200
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['MIS_TRAIN', 'MIS_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]
@@ -21,7 +25,7 @@ cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 5
 cfg.TEST.NUM_ROUNDS = 20
 cfg.TEST.NUM_DUAL_ITERATIONS = 50
 cfg.TEST.BATCH_SIZE = 1
-cfg.TEST.VAL_PERIOD = 10
+cfg.TEST.VAL_PERIOD = 1000000
 
 test_datasets, test_params = get_all_lp_instances('/home/ahabbas/data/learnDBCA/independent_set_random/test_split/', 'MIS', None, False, True)
 cfg.TEST.DATA.DATASETS = test_datasets

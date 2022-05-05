@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --mem=250000
 #SBATCH --gres gpu:1
-#SBATCH -t 0-11:59:59
+#SBATCH -t 0-23:59:59
 #SBATCH -o out_dual/slurm_new/%j.out
 #SBATCH --mail-type=end          # send email when job ends
 #SBATCH --mail-user=ahmed.abbas@mpi-inf.mpg.de
@@ -15,7 +15,7 @@
 . ~/.bashrc_private
 eval "$(conda shell.bash hook)"
 # Activate a conda environment:
-conda activate DevLearnDBCA
+conda activate LearnDBCA
 
 FEATURE_EXTRACTOR_DEPTH=1
 DUAL_PRED_DEPTH=1
@@ -23,21 +23,22 @@ VAR_FEATURE_DIM=16
 CON_FEATURE_DIM=16
 EDGE_FEATURE_DIM=8
 NUM_ROUNDS_WITH_GRAD=1
-NUM_DUAL_ITR=20
-GRAD_DUAL_ITR_MAX_ITR=20
-PREDICT_OMEGA=True
-PREDICT_DIST_WEIGHTS=True
-NUM_ROUNDS_TRAIN=20
-BASE_LR=1e-4
+NUM_DUAL_ITR=1
+GRAD_DUAL_ITR_MAX_ITR=1
+PREDICT_OMEGA=False
+PREDICT_DIST_WEIGHTS=False
+NUM_ROUNDS_TRAIN=400
+BASE_LR=1e-3
 NUM_HIDDEN_LAYERS_EDGE=2
 USE_RELATIVE_GAP_LOSS=False
 USE_LSTM_VAR=False
-USE_NET_SOLVER_COSTS=False
+USE_NET_SOLVER_COSTS=True
 FREE_UPDATE=True
+FREE_UPDATE_LOSS_WEIGHT=1.0
 
-#--test-non-learned
-python train_dual_ascent.py --config-file config_dual/config_worms_full.py \
-    OUT_REL_DIR WORMS/nobackup/vf/v7_double_bs2_${FEATURE_EXTRACTOR_DEPTH}_${DUAL_PRED_DEPTH}_${VAR_FEATURE_DIM}_${CON_FEATURE_DIM}_${EDGE_FEATURE_DIM}_${NUM_ROUNDS_WITH_GRAD}_${NUM_DUAL_ITR}_${GRAD_DUAL_ITR_MAX_ITR}_${NUM_ROUNDS_TRAIN}_${PREDICT_OMEGA}_${PREDICT_DIST_WEIGHTS}_${BASE_LR}_${USE_RELATIVE_GAP_LOSS}_${NUM_HIDDEN_LAYERS_EDGE}_${USE_NET_SOLVER_COSTS}_${FREE_UPDATE}_${USE_LSTM_VAR} \
+#--test-primal --test-non-learned
+python train_dual_ascent.py --config-file config_dual/config_worms_full.py --test-precision-float \
+    OUT_REL_DIR WORMS/nobackup/v_new/v2_mixed_var_start_grad_wo_prev_dw_${FEATURE_EXTRACTOR_DEPTH}_${DUAL_PRED_DEPTH}_${VAR_FEATURE_DIM}_${CON_FEATURE_DIM}_${EDGE_FEATURE_DIM}_${NUM_ROUNDS_WITH_GRAD}_${NUM_DUAL_ITR}_${GRAD_DUAL_ITR_MAX_ITR}_${NUM_ROUNDS_TRAIN}_${PREDICT_OMEGA}_${PREDICT_DIST_WEIGHTS}_${BASE_LR}_${USE_RELATIVE_GAP_LOSS}_${NUM_HIDDEN_LAYERS_EDGE}_${USE_NET_SOLVER_COSTS}_${FREE_UPDATE}_${USE_LSTM_VAR} \
     MODEL.FEATURE_EXTRACTOR_DEPTH ${FEATURE_EXTRACTOR_DEPTH} \
     TRAIN.BASE_LR ${BASE_LR} \
     TRAIN.USE_RELATIVE_GAP_LOSS ${USE_RELATIVE_GAP_LOSS} \
@@ -54,6 +55,7 @@ python train_dual_ascent.py --config-file config_dual/config_worms_full.py \
     TRAIN.NUM_ROUNDS ${NUM_ROUNDS_TRAIN} \
     MODEL.USE_NET_SOLVER_COSTS ${USE_NET_SOLVER_COSTS} \
     MODEL.USE_LSTM_VAR ${USE_LSTM_VAR} \
-    MODEL.FREE_UPDATE ${FREE_UPDATE} 
+    MODEL.FREE_UPDATE ${FREE_UPDATE} \
+    TRAIN.FREE_UPDATE_LOSS_WEIGHT ${FREE_UPDATE_LOSS_WEIGHT}
 
 exit 0

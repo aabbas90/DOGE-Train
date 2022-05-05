@@ -1,16 +1,18 @@
 #!/bin/bash
 
-##SBATCH -p gpu22
-##SBATCH -w gpu22-a100-01
-##SBATCH -t 0-05:59:59
-#SBATCH -p gpu20
+#SBATCH -p gpu22
+#SBATCH -w gpu22-a100-01
+#SBATCH -t 0-23:59:59
+##SBATCH -p gpu20
 #SBATCH -t 1-23:59:59
 #SBATCH --ntasks=16
 #SBATCH --nodes=1
 #SBATCH --mem=250000
 #SBATCH --gres gpu:1
 #SBATCH -o out_dual/slurm_new/%j.out
-#SBATCH --mail-type=end          # send email when job ends
+#SBATCH --mail-type=time_limit
+#SBATCH --mail-type=fail
+#SBATCH --mail-type=end
 #SBATCH --mail-user=ahmed.abbas@mpi-inf.mpg.de
 ####SBATCH --signal=SIGUSR1@90
 
@@ -18,7 +20,10 @@
 . ~/.bashrc
 eval "$(conda shell.bash hook)"
 # Activate a conda environment:
-conda activate DevLearnDBCA
+conda activate LearnDBCA_new #_old_glib
+
+#export GRB_LICENSE_FILE=/home/ahabbas/gurobi_gpu20_29/gurobi.lic
+export GRB_LICENSE_FILE=/home/ahabbas/gurobi_gpu22_a100_a01/gurobi.lic
 
 FEATURE_EXTRACTOR_DEPTH=1
 DUAL_PRED_DEPTH=1
@@ -26,22 +31,23 @@ VAR_FEATURE_DIM=16
 CON_FEATURE_DIM=16
 EDGE_FEATURE_DIM=8
 NUM_ROUNDS_WITH_GRAD=1
-NUM_DUAL_ITR=5
-GRAD_DUAL_ITR_MAX_ITR=5
-PREDICT_OMEGA=False
-PREDICT_DIST_WEIGHTS=False
-NUM_ROUNDS_TRAIN=2000
+NUM_DUAL_ITR=1
+GRAD_DUAL_ITR_MAX_ITR=1
+PREDICT_OMEGA=True
+PREDICT_DIST_WEIGHTS=True
+NUM_ROUNDS_TRAIN=2500
 BASE_LR=5e-4
 NUM_HIDDEN_LAYERS_EDGE=2
 USE_RELATIVE_GAP_LOSS=False
-USE_NET_SOLVER_COSTS=False
+USE_NET_SOLVER_COSTS=True
 USE_LSTM_VAR=False
 FREE_UPDATE=True
 NUM_JOURNEYS=10
-FREE_UPDATE_LOSS_WEIGHT=0.1
+FREE_UPDATE_LOSS_WEIGHT=0.0
+DENORM_FREE_UPDATE=False
 
-python train_dual_ascent.py --config-file config_dual/config_qaplib_full.py \
-    OUT_REL_DIR QAPLIB/nobackup/v_new2/v3_double_bs4_${FEATURE_EXTRACTOR_DEPTH}_${DUAL_PRED_DEPTH}_${VAR_FEATURE_DIM}_${CON_FEATURE_DIM}_${EDGE_FEATURE_DIM}_${NUM_ROUNDS_WITH_GRAD}_${NUM_DUAL_ITR}_${GRAD_DUAL_ITR_MAX_ITR}_${NUM_ROUNDS_TRAIN}_${PREDICT_OMEGA}_${PREDICT_DIST_WEIGHTS}_${BASE_LR}_${USE_RELATIVE_GAP_LOSS}_${NUM_HIDDEN_LAYERS_EDGE}_${USE_NET_SOLVER_COSTS}_${USE_LSTM_VAR}_${FREE_UPDATE}_${NUM_JOURNEYS}_${FREE_UPDATE_LOSS_WEIGHT} \
+python train_dual_ascent.py --config-file config_dual/config_qaplib_test_large.py --test-non-learned --eval-only --only-test-non-learned \
+    OUT_REL_DIR QAPLIB/nobackup/large/v1_non_learned_${FEATURE_EXTRACTOR_DEPTH}_${DUAL_PRED_DEPTH}_${VAR_FEATURE_DIM}_${CON_FEATURE_DIM}_${EDGE_FEATURE_DIM}_${NUM_ROUNDS_WITH_GRAD}_${NUM_DUAL_ITR}_${GRAD_DUAL_ITR_MAX_ITR}_${NUM_ROUNDS_TRAIN}_${PREDICT_OMEGA}_${PREDICT_DIST_WEIGHTS}_${BASE_LR}_${USE_RELATIVE_GAP_LOSS}_${NUM_HIDDEN_LAYERS_EDGE}_${USE_NET_SOLVER_COSTS}_${USE_LSTM_VAR}_${FREE_UPDATE}_${NUM_JOURNEYS}_${FREE_UPDATE_LOSS_WEIGHT}_${DENORM_FREE_UPDATE} \
     MODEL.FEATURE_EXTRACTOR_DEPTH ${FEATURE_EXTRACTOR_DEPTH} \
     TRAIN.BASE_LR ${BASE_LR} \
     TRAIN.USE_RELATIVE_GAP_LOSS ${USE_RELATIVE_GAP_LOSS} \
@@ -60,6 +66,7 @@ python train_dual_ascent.py --config-file config_dual/config_qaplib_full.py \
     MODEL.USE_LSTM_VAR ${USE_LSTM_VAR} \
     MODEL.FREE_UPDATE ${FREE_UPDATE} \
     TRAIN.NUM_JOURNEYS ${NUM_JOURNEYS} \
-    TRAIN.FREE_UPDATE_LOSS_WEIGHT ${FREE_UPDATE_LOSS_WEIGHT}
-
+    TRAIN.FREE_UPDATE_LOSS_WEIGHT ${FREE_UPDATE_LOSS_WEIGHT} \
+    MODEL.DENORM_FREE_UPDATE ${DENORM_FREE_UPDATE} \
+    TRAIN.BATCH_SIZE 4
 exit 0

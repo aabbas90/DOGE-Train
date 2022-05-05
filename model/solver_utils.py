@@ -209,15 +209,15 @@ def distribute_delta(solvers, solver_state):
     return {'lo_costs': lo_costs, 'hi_costs': hi_costs, 'def_mm': torch.zeros_like(solver_state['def_mm'])}
 
 def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, improvement_slope = 1e-6, 
-                    grad_dual_itr_max_itr = None, compute_history_for_itrs = 20, avg_sol_beta = 0.9,
-                    logger = None, filepahts = None, step = None):
+                    grad_dual_itr_max_itr = None, compute_history_for_itrs = 20, avg_sol_beta = 0.9, randomize_num_itrs = False):
     assert num_iterations >= compute_history_for_itrs
     if grad_dual_itr_max_itr is None:
         grad_dual_itr_max_itr = num_iterations
     num_caches = min(int(grad_dual_itr_max_itr / 3), 25)
-    lo_costs, hi_costs, def_mm, sol_avg, lb_first_order_avg, lb_sec_order_avg = bdd_cuda_torch.DualIterations.apply(solvers, solver_state['lo_costs'], solver_state['hi_costs'], solver_state['def_mm'], 
+    lo_costs, hi_costs, def_mm, sol_avg, lb_first_order_avg, lb_sec_order_avg = bdd_cuda_torch.DualIterations.apply(solvers, 
+                                                                    solver_state['lo_costs'], solver_state['hi_costs'], solver_state['def_mm'], 
                                                                     dist_weights, num_iterations, omega, grad_dual_itr_max_itr, improvement_slope, num_caches,
-                                                                    compute_history_for_itrs, avg_sol_beta, logger, filepahts, step)
+                                                                    compute_history_for_itrs, avg_sol_beta, randomize_num_itrs)
     solver_state['lo_costs'] = lo_costs
     solver_state['hi_costs'] = hi_costs
     solver_state['def_mm'] = def_mm
@@ -326,24 +326,6 @@ def primal_rounding_non_learned(num_rounds, solvers, norm_solver_state, obj_mult
 #         #     f'equal min-marg diff.: {var_undecided.sum():.0f}, '
 #         #     f'inconsistent min-marg diff.: {var_inconsistent.sum():.0f}')
 #     return mm_diff, None, logs
-
-
-def populate_grad_features_dual(solvers, solver_state, dist_weights, omega_vec, num_grad_iterations, batch_index_con, logger = None, filepaths = None, step = None):
-    with torch.set_grad_enabled(True):
-        solver_state_g = {'lo_costs': solver_state['lo_costs'].clone().detach(), 
-                        'hi_costs': solver_state['hi_costs'].clone().detach(),
-                        'def_mm': solver_state['def_mm'].clone().detach()}
-        dist_weights_g = dist_weights.clone().detach().requires_grad_(True)
-        dist_weights_g.retain_grad()
-        omega_vec_g = omega_vec.clone().detach().requires_grad_(True)
-        omega_vec_g.retain_grad()
-
-        solver_state_g = dual_iterations(solvers, solver_state_g, dist_weights_g, num_grad_iterations, omega_vec_g, 0.0, num_grad_iterations, logger, filepaths, step)
-        solver_state_g = distribute_delta(solvers, solver_state_g)
-        lb_after_dist = compute_per_bdd_lower_bound(solvers, solver_state_g)
-        loss = -scatter_sum(lb_after_dist, batch_index_con).mean()
-        loss.backward()
-    return dist_weights_g.grad, omega_vec_g.grad
 
 def dual_feasbility_check(solvers, solver_state, orig_primal_obj, num_vars_per_instance, distribute_delta_before = False, tolerance = 1e-3):
     var_start = 0

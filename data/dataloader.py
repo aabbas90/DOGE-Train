@@ -3,7 +3,7 @@ from data.random_dataloader import ILPRandomDiskDataset
 from data.disk_dataloader import ILPDiskDataset
 from torch_geometric.loader import DataLoader
 
-def get_ilp_gnn_loaders(cfg, skip_dual_solved = False, test_only = False):
+def get_ilp_gnn_loaders(cfg, skip_dual_solved = False, test_only = False, test_precision_double = False, test_on_train = False):
     combined_train_loader = None
     val_loaders = []
     val_datanames = []
@@ -46,16 +46,25 @@ def get_ilp_gnn_loaders(cfg, skip_dual_solved = False, test_only = False):
 
     test_loaders = []
     test_data_names = []
-    for test_data_name in cfg.TEST.DATA.DATASETS:
-        if '_Random' in test_data_name:
-            test_dataset = ILPRandomDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False)
-        else:
-            test_dataset = ILPDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False)
-        test_loaders.append(DataLoader(test_dataset, 
-                                batch_size=1, 
-                                shuffle=False, 
-                                follow_batch = ['objective', 'rhs_vector', 'edge_index_var_con'], 
-                                num_workers = cfg.DATA.NUM_WORKERS))
-        test_data_names.append(test_data_name)
+    if not test_on_train:
+        for test_data_name in cfg.TEST.DATA.DATASETS:
+            if '_Random' in test_data_name:
+                test_dataset = ILPRandomDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False, use_double_precision = test_precision_double)
+            else:
+                test_dataset = ILPDiskDataset.from_config(cfg.TEST, test_data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False, use_double_precision = test_precision_double)
+            test_loaders.append(DataLoader(test_dataset, batch_size=1, shuffle=False, 
+                                    follow_batch = ['objective', 'rhs_vector', 'edge_index_var_con'], 
+                                    num_workers = cfg.DATA.NUM_WORKERS))
+            test_data_names.append(test_data_name)
+    else:
+        for data_name in cfg.DATA.DATASETS:
+            if '_Random' in data_name:
+                test_dataset = ILPRandomDiskDataset.from_config(cfg, data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False, use_double_precision = test_precision_double)
+            else:
+                test_dataset = ILPDiskDataset.from_config(cfg, data_name, cfg.MODEL.CON_LP_FEATURES, skip_dual_solved = False, use_double_precision = test_precision_double)
+            test_loaders.append(DataLoader(test_dataset, batch_size=1, shuffle=False, 
+                                    follow_batch = ['objective', 'rhs_vector', 'edge_index_var_con'], 
+                                    num_workers = cfg.DATA.NUM_WORKERS))
+            test_data_names.append(data_name)
 
     return combined_train_loader, val_loaders, val_datanames, test_loaders, test_data_names

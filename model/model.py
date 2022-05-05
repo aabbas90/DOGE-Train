@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 from torch_scatter import scatter_sum, scatter_mean, scatter_max
-from torch_geometric.nn import TransformerConv, GATv2Conv, LayerNorm
+from torch_geometric.nn import TransformerConv, LayerNorm
 import model.solver_utils as sol_utils
+#from model.layer_norm_old import LayerNorm
 
 # https://github.com/rusty1s/pytorch_geometric/issues/1210 might be useful
 # https://pytorch-geometric.readthedocs.io/en/latest/modules/nn.html?highlight=meta%20layer#torch_geometric.nn.meta.MetaLayer
@@ -288,7 +289,8 @@ class PrimalPerturbationBlock(torch.nn.Module):
 class DualDistWeightsBlock(torch.nn.Module):
     def __init__(self, var_lp_f_names, con_lp_f_names, edge_lp_f_names, depth, var_dim, con_dim, edge_dim, history_num_itr = 20,
                 use_layer_norm = False, predict_dist_weights = False, predict_omega = False, num_hidden_layers_edge = 0, 
-                use_net_solver_costs = False, use_lstm_var = False, free_update = False, free_update_loss_weight = 0.0):
+                use_net_solver_costs = False, use_lstm_var = False, free_update = False, free_update_loss_weight = 0.0,
+                denormalize_free_update = False):
         super(DualDistWeightsBlock, self).__init__()
         self.var_lp_f_names = var_lp_f_names
         self.con_lp_f_names = con_lp_f_names
@@ -305,6 +307,7 @@ class DualDistWeightsBlock(torch.nn.Module):
         self.predict_omega = predict_omega
         self.free_update = free_update
         self.free_update_loss_weight = free_update_loss_weight
+        self.denormalize_free_update = denormalize_free_update
         self.maintain_feasibility = False
         assert free_update_loss_weight >= 0
         assert free_update_loss_weight <= 1.0
@@ -333,8 +336,9 @@ class DualDistWeightsBlock(torch.nn.Module):
                 omega, edge_index_var_con,
                 num_dual_iterations, grad_dual_itr_max_itr, dual_improvement_slope, valid_edge_mask, 
                 batch_index_var, batch_index_con, batch_index_edge,
-                logger, filepaths, step, var_objective, var_hidden_states_lstm = None, dist_weights_isotropic = None):
+                var_objective, var_hidden_states_lstm = None, dist_weights_isotropic = None, randomize_num_itrs = False):
         
+        assert(not randomize_num_itrs)
         if self.use_net_solver_costs:
             net_solver_state, con_lp_f, norm_edge = compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, batch_index_con, con_lp_f, self.con_lp_f_names, 'inf')
             var_learned_f, con_learned_f, edge_learned_f = self.feature_extractor(var_lp_f, con_lp_f, net_solver_state, edge_lp_f_wo_ss, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge)
@@ -363,10 +367,10 @@ class DualDistWeightsBlock(torch.nn.Module):
         if self.predict_dist_weights:
             dist_weights = predictions[:, 0]
             dist_weights = sol_utils.normalize_distribution_weights_softmax(dist_weights, edge_index_var_con)
-            try:
-                assert(torch.all(torch.isfinite(dist_weights)))
-            except:
-                breakpoint()
+            # try:
+            #     assert(torch.all(torch.isfinite(dist_weights)))
+            # except:
+            #     breakpoint()
         else:
             assert dist_weights_isotropic.shape == solver_state['hi_costs'].shape
             dist_weights = dist_weights_isotropic
@@ -375,12 +379,12 @@ class DualDistWeightsBlock(torch.nn.Module):
         if self.free_update:
             update = predictions[:, int(self.predict_dist_weights)] * torch.abs(self.subgradient_step_size.to(var_lp_f.device))
             update = (update - scatter_mean(update.to(torch.float64), edge_index_var_con[0])[edge_index_var_con[0]]).to(torch.get_default_dtype())
-            # if self.use_net_solver_costs:
-            #     update = norm_edge * update
-            try:
-                assert(torch.all(torch.isfinite(update)))
-            except:
-                breakpoint()
+            if self.use_net_solver_costs and self.denormalize_free_update:
+                update = norm_edge * update
+            # try:
+            #     assert(torch.all(torch.isfinite(update)))
+            # except:
+            #     breakpoint()
             solver_state['hi_costs'] = solver_state['hi_costs'] + update
             if self.maintain_feasibility and not update.requires_grad:
                 solver_state_dd = sol_utils.distribute_delta(solvers, solver_state)
@@ -395,15 +399,16 @@ class DualDistWeightsBlock(torch.nn.Module):
 
         omega_vec = None
         if num_dual_iterations > 0:
+
             if self.predict_omega:
                 omega_vec = torch.sigmoid(predictions[:, int(self.predict_dist_weights) + int(self.free_update)])
                 # Dual iterations
                 solver_state, sol_avg, lb_first_order_avg, lb_sec_order_avg = sol_utils.dual_iterations(solvers, solver_state, dist_weights, num_dual_iterations, 
-                                                                        omega_vec, dual_improvement_slope, grad_dual_itr_max_itr, self.history_num_itr, 0.9, logger, filepaths, step)
+                                                                        omega_vec, dual_improvement_slope, grad_dual_itr_max_itr, self.history_num_itr, 0.9, randomize_num_itrs)
             else:
                 # Dual iterations
                 solver_state, sol_avg, lb_first_order_avg, lb_sec_order_avg = sol_utils.dual_iterations(solvers, solver_state, dist_weights, num_dual_iterations, 
-                                                                        omega, dual_improvement_slope, grad_dual_itr_max_itr, self.history_num_itr, 0.9)
+                                                                        omega, dual_improvement_slope, grad_dual_itr_max_itr, self.history_num_itr, 0.9, randomize_num_itrs)
 
         if 'prev_dist_weights' in self.edge_lp_f_names:
             edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('prev_dist_weights')] = dist_weights.clone().detach()
@@ -413,7 +418,12 @@ class DualDistWeightsBlock(torch.nn.Module):
             edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('omega')] = omega_vec.clone().detach()
 
         if 'mm_diff' in self.edge_lp_f_names:
-            mm_diff = sol_utils.compute_all_min_marginal_diff(solvers, sol_utils.distribute_delta(solvers, solver_state))
+            if solver_state['lo_costs'].requires_grad:
+                solver_state_temp = {'lo_costs': solver_state['lo_costs'].clone(), 'hi_costs': solver_state['hi_costs'].clone(), 'def_mm': solver_state['def_mm'].clone()}
+                solver_state_dd = sol_utils.distribute_delta(solvers, solver_state_temp)
+            else:
+                solver_state_dd = sol_utils.distribute_delta(solvers, solver_state)
+            mm_diff = sol_utils.compute_all_min_marginal_diff(solvers, solver_state_dd)
             mm_diff[~valid_edge_mask] = 0
             edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('mm_diff')] = mm_diff
 
@@ -435,7 +445,6 @@ class DualDistWeightsBlock(torch.nn.Module):
                 edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('grad_omega')] = omega_vec_grad
 
         con_lp_f[:, self.con_lp_f_names.index('lb')] = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state)
-       
         return solver_state, var_lp_f, con_lp_f, edge_lp_f_wo_ss, dist_weights, omega_vec, var_hidden_states_lstm, lb_after_dist_free_update
 
 def run_full_coord_iterations(solvers, lo_costs, hi_costs, def_mm, new_mm, damping, dist_weights, var_indices, num_dual_iterations):

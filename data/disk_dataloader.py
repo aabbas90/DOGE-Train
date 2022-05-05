@@ -1,4 +1,5 @@
 import os
+import torch
 import torch_geometric
 import pickle
 from tqdm import tqdm
@@ -6,13 +7,16 @@ from data.ilp_converters import create_bdd_repr, create_graph_from_bdd_repr, sol
 from data.gt_generator import generate_gt_gurobi
 
 class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
-    def __init__(self, data_root_dir, files_to_load, read_dual_converged, need_gt, need_ilp_gt, need_bdd_constraint_features, load_in_memory, skip_dual_solved = False, extension = '.lp'):
+    def __init__(self, data_root_dir, files_to_load, read_dual_converged, 
+                    need_gt, need_ilp_gt, need_bdd_constraint_features, 
+                    load_in_memory, skip_dual_solved = False, extension = '.lp', use_double_precision = False):
         super().__init__(root=None, transform=None, pre_transform=None)
         self.data_root_dir = data_root_dir
         self.files_to_load = files_to_load
         self.read_dual_converged = read_dual_converged
         self.need_gt = need_gt
         self.need_ilp_gt = need_ilp_gt
+        self.use_double_precision = use_double_precision
         self.need_bdd_constraint_features = need_bdd_constraint_features
         self.skip_dual_solved = skip_dual_solved
         self.load_in_memory = load_in_memory
@@ -21,7 +25,7 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
         self.process_custom()
 
     @classmethod
-    def from_config(cls, cfg, data_name, con_features, skip_dual_solved):
+    def from_config(cls, cfg, data_name, con_features, skip_dual_solved, use_double_precision = False):
         params = cfg.DATA[data_name + '_PARAMS']
         data_root_dir = params.root_dir
         files_to_load = params.files_to_load
@@ -48,7 +52,8 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
             need_bdd_constraint_features = need_bdd_constraint_features,
             skip_dual_solved = skip_dual_solved,
             load_in_memory = load_in_memory,
-            extension = extension)
+            extension = extension,
+            use_double_precision = use_double_precision)
 
     def process_custom(self):
         self.file_list = []
@@ -89,8 +94,18 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                 else:
                     gt_info = pickle.load(open(sol_path, 'rb'))
 
-                bdd_repr_path = instance_path.replace(self.extension, '_bdd_repr.pkl')
-                bdd_repr_conv_path = instance_path.replace(self.extension, '_bdd_repr_dual_converged.pkl')
+                orig_dtype = torch.get_default_dtype()
+                if torch.get_default_dtype() == torch.float32 and not self.use_double_precision:
+                    bdd_repr_path = instance_path.replace(self.extension, '_bdd_repr.pkl')
+                    bdd_repr_conv_path = instance_path.replace(self.extension, '_bdd_repr_dual_converged.pkl')
+                    sol_processed_path = sol_path
+                    torch.set_default_dtype(torch.float32)
+                else:
+                    bdd_repr_path = instance_path.replace(self.extension, '_bdd_repr_double.pkl')
+                    bdd_repr_conv_path = instance_path.replace(self.extension, '_bdd_repr_dual_converged_double.pkl')
+                    sol_processed_name = sol_name.replace('.pkl', '_double.pkl')
+                    sol_processed_path = os.path.join(path.replace('instances', 'solutions'), sol_processed_name)
+                    torch.set_default_dtype(torch.float64)
                 if not os.path.exists(bdd_repr_path):
                     print(f'Creating BDD repr of instance: {instance_path}')
                     bdd_repr, gt_info = create_bdd_repr(instance_path, gt_info, self.need_bdd_constraint_features)
@@ -100,7 +115,7 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                         continue
                     print(f'Saving bdd_repr: {bdd_repr_path}')
                     pickle.dump(bdd_repr, open(bdd_repr_path, "wb"), protocol = pickle.HIGHEST_PROTOCOL)
-                    pickle.dump(gt_info, open(sol_path, "wb"))
+                    pickle.dump(gt_info, open(sol_processed_path, "wb"))
                 if self.read_dual_converged:
                     if not os.path.exists(bdd_repr_conv_path):
                         bdd_repr = pickle.load(open(bdd_repr_path, 'rb'))
@@ -111,8 +126,9 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
                     bdd_repr_path = bdd_repr_conv_path # Read dual converged instead.
                 self.file_list.append({'instance_path': instance_path, 
                                     'bdd_repr_path': bdd_repr_path,
-                                    'sol_path': sol_path, 
+                                    'sol_path': sol_processed_path, 
                                     'lp_size': os.path.getsize(instance_path)})
+                torch.set_default_dtype(orig_dtype) # Revert back to original data type.
         def get_size(elem):
             return elem['lp_size']
         # Sort by size so that largest instances automatically go to end indices.
@@ -139,9 +155,14 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
         return len(self.file_list)
 
     def get(self, index):
+        orig_dtype = torch.get_default_dtype()
+        if self.use_double_precision:
+            torch.set_default_dtype(torch.float64)
         if self.load_in_memory:
             bdd_repr, gt_info, lp_path = self._get_from_memory(index)
         else:
             bdd_repr, gt_info, lp_path = self._get_from_disk(index)
-        return create_graph_from_bdd_repr(bdd_repr, gt_info, lp_path)
+        graph = create_graph_from_bdd_repr(bdd_repr, gt_info, lp_path)
+        torch.set_default_dtype(orig_dtype)
+        return graph
 

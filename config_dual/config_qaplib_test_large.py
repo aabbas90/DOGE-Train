@@ -30,7 +30,7 @@ cfg.TEST.BATCH_SIZE = 1
 cfg.TEST.VAL_PERIOD = 5000 # Validate after every n epoch (can be less than 1). TODO
 
 cfg.TEST.DATA.DATASETS = ['QAP_TEST']
-cfg.TEST.DATA.QAP_TEST_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/qaplib_full/small/test_split/', 'read_dual_converged' : False, 'need_gt': False})
+cfg.TEST.DATA.QAP_TEST_PARAMS = CN({'files_to_load': [], 'root_dir': '/home/ahabbas/data/learnDBCA/cv_structure_pred/qaplib_full/test_split_large/', 'read_dual_converged' : False, 'need_gt': False})
 
 cfg.OUTPUT_ROOT_DIR = '/home/ahabbas/projects/LearnDBCA/out_dual/'
 cfg.OUT_REL_DIR = 'QAPLIB/v1/'

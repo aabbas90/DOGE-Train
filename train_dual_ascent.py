@@ -3,7 +3,7 @@ from genericpath import isfile
 import os, argparse
 import numpy as np
 import torch
-torch.set_default_dtype(torch.float64)
+torch.set_default_dtype(torch.float32)
 from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
@@ -24,6 +24,7 @@ def get_final_config(args):
     if (hasattr(args, 'config_file')) and os.path.exists(args.config_file):
         cfg.set_new_allowed(True)
         cfg.merge_from_file(args.config_file)
+    orig_root_dir = cfg.OUTPUT_ROOT_DIR
     cfg.merge_from_list(args.opts)
     cfg.freeze()
     output_dir = os.path.join(cfg.OUTPUT_ROOT_DIR, cfg.OUT_REL_DIR)
@@ -35,7 +36,7 @@ def get_final_config(args):
     print('USING FOLLOWING CONFIG:')
     print(cfg)
     print("Wrote config file at: {}".format(path))
-    return cfg, output_dir
+    return cfg, output_dir, orig_root_dir
 
 def save_best_ckpt_cfg(cfg, output_dir, best_ckpt_path):
     cfg.defrost()
@@ -45,12 +46,14 @@ def save_best_ckpt_cfg(cfg, output_dir, best_ckpt_path):
     with open(path, 'w') as yaml_file:
         cfg.dump(stream = yaml_file, default_flow_style=False)
 
-def find_ckpt(OUTPUT_ROOT_DIR, ckpt_rel_path, find_best_ckpt = False):
+def find_ckpt(root_dir, ckpt_rel_path, find_best_ckpt = False):
     if ckpt_rel_path is not None and os.path.isfile(ckpt_rel_path):
         return ckpt_rel_path
-    if ckpt_rel_path is not None and os.path.isfile(os.path.join(OUTPUT_ROOT_DIR, ckpt_rel_path)):
-        return os.path.join(OUTPUT_ROOT_DIR, ckpt_rel_path)
-    versions = os.path.join(OUTPUT_ROOT_DIR, 'default')
+    if ckpt_rel_path is not None and os.path.isfile(os.path.join(root_dir, ckpt_rel_path)):
+        return os.path.join(root_dir, ckpt_rel_path)
+    versions = os.path.join(root_dir, 'default')
+    if not os.path.isdir(versions):
+        return None
     for folder in os.listdir(versions):
         ckpt_folder = os.path.join(versions, folder, 'checkpoints')
         if not find_best_ckpt:
@@ -66,7 +69,7 @@ def find_ckpt(OUTPUT_ROOT_DIR, ckpt_rel_path, find_best_ckpt = False):
 
 def main(args):
     print(datetime.now().time())
-    cfg, output_dir = get_final_config(args)   
+    cfg, output_dir, orig_output_dir = get_final_config(args)   
     seed_everything(cfg.SEED)
     gpus = 0
     if cfg.DEVICE == 'gpu':
@@ -80,8 +83,10 @@ def main(args):
     # wandb.init(project=os.path.basename(output_dir), sync_tensorboard=True)
     tb_logger = TensorBoardLogger(output_dir, default_hp_metric=False, max_queue = 1000, flush_secs = 60)
     ckpt_path = None
-    if cfg.MODEL.CKPT_PATH is not None or args.eval_only:
+    if cfg.MODEL.CKPT_PATH is not None or (args.eval_only and not args.only_test_non_learned):
         ckpt_path = find_ckpt(cfg.OUTPUT_ROOT_DIR, cfg.MODEL.CKPT_PATH, args.eval_best_ckpt)
+        if ckpt_path is None:
+            ckpt_path = find_ckpt(orig_output_dir, cfg.MODEL.CKPT_PATH, args.eval_best_ckpt)
 
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
     checkpoint_callback = ModelCheckpoint(save_last = True, save_on_train_epoch_end = True, mode = 'max', save_top_k = 1, monitor = 'train_last_round_lb', verbose = True)
@@ -102,13 +107,15 @@ def main(args):
                     num_sanity_val_steps = num_sanity_val_steps, 
                     log_every_n_steps=cfg.LOG_EVERY,
                     track_grad_norm=2,
-                    gradient_clip_val=50.0,
+                    gradient_clip_val=cfg.TRAIN.GRAD_CLIP_VAL,
                     callbacks=[checkpoint_callback, early_stopping],
-                    detect_anomaly = False)
-                    # gradient_clip_val=100.0,
-                    # gradient_clip_algorithm="norm",
+                    detect_anomaly = True)
 
-    combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg, skip_dual_solved = True, test_only = args.eval_only)
+    combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg, 
+                                                                                        skip_dual_solved = True, 
+                                                                                        test_only = args.eval_only, 
+                                                                                        test_precision_double = not args.test_precision_float,
+                                                                                        test_on_train = args.test_on_train)
     if 'SLURM_JOB_ID' in os.environ:
         job_id = os.environ['SLURM_JOB_ID']
         job_file_path = f'out_dual/slurm_new/{job_id}.out'
@@ -122,7 +129,9 @@ def main(args):
             dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
             val_datanames = val_datanames,
             test_datanames = test_datanames,
-            non_learned_updates_test = args.test_non_learned)
+            non_learned_updates_test = args.test_non_learned,
+            only_test_non_learned = args.only_test_non_learned,
+            test_primal = args.test_primal)
     else:
         print(f'Initializing from scratch.')
         model = DualAscentBDD.from_config(cfg, 
@@ -131,9 +140,11 @@ def main(args):
             dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
             val_datanames = val_datanames,
             test_datanames = test_datanames,
-            non_learned_updates_test = args.test_non_learned)
-
+            non_learned_updates_test = args.test_non_learned,
+            only_test_non_learned = args.only_test_non_learned,
+            test_primal = args.test_primal)
     if not args.eval_only:
+        model = model.to(torch.float32) # If loading pre-trained checkpoint and resuming training then train in fp32.
         trainer.fit(model, combined_train_loader, val_loaders)
         save_best_ckpt_cfg(cfg, output_dir, checkpoint_callback.best_model_path)
         model = DualAscentBDD.load_from_checkpoint(checkpoint_callback.best_model_path,
@@ -142,13 +153,20 @@ def main(args):
             dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
             val_datanames = val_datanames,
             test_datanames = test_datanames,
-            non_learned_updates_test = args.test_non_learned)
+            non_learned_updates_test = args.test_non_learned,
+            test_primal = args.test_primal)
         combined_train_loader = None
         val_loaders = None
+        if not args.test_precision_float:
+            model = model.to(torch.float64)
+            torch.set_default_dtype(torch.float64)
         model.eval()
         trainer.test(model, test_dataloaders = test_loaders)
     else:
         model.eval()
+        if not args.test_precision_float:
+            model = model.to(torch.float64)
+            torch.set_default_dtype(torch.float64)
         trainer.test(model, test_dataloaders = test_loaders)
     print(datetime.now().time())
 
@@ -158,6 +176,10 @@ if __name__ == "__main__":
     parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
     parser.add_argument("--eval-best-ckpt", action="store_true", help="perform evaluation on best ckpt instead of last")
     parser.add_argument("--test-non-learned", action="store_true", help="Runs FastDOG updates.")
+    parser.add_argument("--only-test-non-learned", action="store_true", help="Only runs FastDOG updates.")
+    parser.add_argument("--test-primal", action="store_true", help="Run FastDOG primal rounding after dual converged.")
+    parser.add_argument("--test-precision-float", action="store_true", help="Performs testing in FP32 format. Recommended to not set due to numerical issues in FP32.")
+    parser.add_argument("--test-on-train", action="store_true", help="Performs testing on training data.")
     parser.add_argument(
         "opts",
         help="Modify config options by adding 'KEY VALUE' pairs at the end of the command. ",

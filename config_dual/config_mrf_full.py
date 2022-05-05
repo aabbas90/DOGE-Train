@@ -5,6 +5,11 @@ cfg = get_cfg_defaults()
 
 cfg.LOG_EVERY = 100
 
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff'] 
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff']
+
 cfg.TRAIN.MAX_NUM_EPOCHS = 300
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['MRF_TRAIN', 'MRF_VAL']
@@ -19,10 +24,10 @@ cfg.TRAIN.BASE_LR = 1e-3
 cfg.TRAIN.USE_RELATIVE_GAP_LOSS = False
 cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 10
 
-cfg.TEST.NUM_ROUNDS = 50
-cfg.TEST.NUM_DUAL_ITERATIONS = 200
+cfg.TEST.NUM_ROUNDS = 1000
+cfg.TEST.NUM_DUAL_ITERATIONS = 5
 cfg.TEST.BATCH_SIZE = 1
-cfg.TEST.VAL_PERIOD = 100
+cfg.TEST.VAL_PERIOD = 100000
 
 test_datasets, test_params = get_all_lp_instances('/home/ahabbas/data/learnDBCA/cv_structure_pred/full_inst_mrf/', 'MRF', 'objseg', False)
 cfg.TEST.DATA.DATASETS = test_datasets

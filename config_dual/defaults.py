@@ -42,12 +42,15 @@ cfg.MODEL.VAR_LP_FEATURES = ['obj', 'deg']
 cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg']
 cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg']
 cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg']
-cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'dist_weights', 'prev_sol_avg', 'omega', 'mm_diff'] 
-cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'dist_weights', 'prev_sol_avg', 'omega', 'mm_diff']
+# cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'dist_weights', 'prev_sol_avg', 'omega', 'mm_diff'] 
+# cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'dist_weights', 'prev_sol_avg', 'omega', 'mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff'] 
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff']
 cfg.MODEL.NUM_HIDDEN_LAYERS_EDGE = 0
 cfg.MODEL.USE_NET_SOLVER_COSTS = False
 cfg.MODEL.USE_LSTM_VAR = False
 cfg.MODEL.FREE_UPDATE = False
+cfg.MODEL.DENORM_FREE_UPDATE = False
 
 cfg.DATA = CN()
 
@@ -76,6 +79,7 @@ cfg.TRAIN.LOSS_DISCOUNT_FACTOR = 1.0
 cfg.TRAIN.LOSS_MARGIN = 5e-3
 cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 25
 cfg.TRAIN.FREE_UPDATE_LOSS_WEIGHT = 0.0
+cfg.TRAIN.GRAD_CLIP_VAL = 50.0
 
 cfg.TEST = CN()
 cfg.TEST.NUM_DUAL_ITERATIONS = 10
@@ -83,6 +87,8 @@ cfg.TEST.NUM_ROUNDS = 1 # How many times dual iterations. #TODOAA: Implement bre
 cfg.TEST.DUAL_IMPROVEMENT_SLOPE = 1e-9
 cfg.TEST.VAL_BATCH_SIZE = 1
 cfg.TEST.PERIOD = 50 # Validate after every n epoch (can be less than 1).
+cfg.TEST.VAL_PERIOD = 10000000
+cfg.LOG_EVERY = 20
 
 cfg.TEST.DATA = CN() # Stores dataset params used for testing only.
 cfg.SEED = 1
