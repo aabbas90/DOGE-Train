@@ -1,11 +1,11 @@
 #!/bin/bash
 
 #SBATCH -p gpu22
-#SBATCH -w gpu22-a100-02
+#SBATCH -w gpu22-a100-04
 ##SBATCH -p gpu20
-#SBATCH --ntasks=16
+##SBATCH --ntasks=16
 #SBATCH --nodes=1
-#SBATCH --mem=250000
+##SBATCH --mem=250000
 #SBATCH --gres gpu:1
 #SBATCH -t 0-11:59:59
 #SBATCH -o out_dual/slurm_new/%j.out
@@ -19,8 +19,8 @@
 . ~/.bashrc
 eval "$(conda shell.bash hook)"
 # Activate a conda environment:
-#conda activate LearnDBCA_new
-conda activate LearnDBCA_new #_old_glib
+conda activate LearnDBCA_new
+#conda activate LearnDBCA_new_old_glib
 
 export OMP_NUM_THREADS=16
 

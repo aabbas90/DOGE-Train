@@ -5,12 +5,13 @@ cfg = get_cfg_defaults()
 
 cfg.LOG_EVERY = 100
 
-cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
-cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
-cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff'] 
-cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'mm_diff']  #'prev_sol_avg', 
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'mm_diff'] #'prev_sol_avg', 
 
-cfg.TRAIN.MAX_NUM_EPOCHS = 500
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_change_free_update'] #'lb_first_order_avg', 'lb_sec_order_avg',
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_change'] # 'lb_first_order_avg', 'lb_sec_order_avg',
+
+cfg.TRAIN.MAX_NUM_EPOCHS = 1000
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['CT_TRAIN', 'CT_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]

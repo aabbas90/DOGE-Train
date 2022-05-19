@@ -9,7 +9,7 @@ cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
 cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff'] 
 cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff']
 
-cfg.TRAIN.MAX_NUM_EPOCHS = 200
+cfg.TRAIN.MAX_NUM_EPOCHS = 1000
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['MIS_TRAIN', 'MIS_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]

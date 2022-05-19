@@ -11,8 +11,16 @@ worms_instances = {'worm': [f'worm{i}-16-03-11-1745' for i in range(10, 31)]}
 qaplib_small_instances = {'qaplib_small' : ['bur26h', 'had20', 'lipa40b', 'nug30', 'ste36c', 'tho30', 'bur26g', 'lipa40a', 'nug28', 'scr20', 'tai35b', 'kra32', 'nug27', 'rou20', 'tai35a']}
 ind_set_instances = {'ind_set': ['10', '13', '16', '19', '21', '24', '27', '2', '32', '59', '61', '64', '67', '6', '72', '75', '78', '80', '83', '86', '11', '14', '17', '1', '22', '25', '28', '30', '3', '5', '62', '65', '68', '70', '73', '76', '79', '81', '84', '8', '12', '15', '18', '20', '23', '26', '29', '31', '4', '60', '63', '66', '69', '71', '74', '77', '7', '82', '85', '9']}
 mrf_pf_instances = { 'mrf_pf': ['2BBN', '2BCX', '2F3Y', '2FOT', '2HQW', '2O60', '3BXL']}
+qaplib_large_instances = {
+    'qaplib_large_instances': ['lipa50b', 'lipa50a', 'lipa60a', 'lipa60b', 'lipa70b', 'lipa70a', 'tai40a', 'tai40b', 'tai50a', 'tai50b', 'tai60a', 'tai60b', 'tai64c', 'sko42', 'sko49', 'sko56', 'sko64', 'wil50']
+}
+
+qaplib_all_instances = {
+    'qaplib_all_instances': ['bur26h', 'had20', 'lipa40b', 'nug30', 'ste36c', 'tho30', 'bur26g', 'lipa40a', 'nug28', 'scr20', 'tai35b', 'kra32', 'nug27', 'rou20', 'tai35a', 'lipa50b', 'lipa50a', 'lipa60a', 'lipa60b', 'lipa70b', 'lipa70a', 'tai40a', 'tai40b', 'tai50a', 'tai50b', 'tai60a', 'tai60b', 'tai64c', 'sko42', 'sko49', 'sko56', 'sko64', 'wil50']
+}
 
 sp_root_dir = '/BS/discrete_opt/nobackup/bdd_experiments/'
+qaplib_large_dir = '/home/ahabbas/data/learnDBCA/cv_structure_pred/'
 is_root_dir = '/home/ahabbas/data/learnDBCA/independent_set_random/test_logs/'
 mrf_pf_root_dir = '/home/ahabbas/data/learnDBCA/cv_structure_pred/mrf/protein_folding/test_large_logs/'
 
@@ -83,7 +91,10 @@ def get_log_barrier(log_data):
             result=re.match("\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)\s+(\d+)s", line)
             if result is None:
                 continue
-            collected_data.append([float(result[7]), float(result[3])])
+            try:
+                collected_data.append([float(result[7]), float(result[3])])
+            except:
+                return None, None
         if 'Iter' in line:
             started = True
     return np.array(collected_data), False
@@ -109,18 +120,34 @@ def try_write_max_dual_obj(dataset_name, instance_name, current_max_obj, is_opti
         pickle.dump({'max_obj': current_max_obj, 'is_optimal': is_optimal}, f)
         return current_max_obj
 
-def try_get_min_dual_obj(dataset_name, instance_name, current_min_obj): # Minimum dual objective used to normalize relative gap.
+def try_write_max_time(dataset_name, instance_name, current_max_time):
+    gt_dir = 'max_times'
+    os.makedirs(gt_dir, exist_ok = True)
+    gt_file = os.path.join(gt_dir, dataset_name + instance_name + '.txt')
+    if os.path.isfile(gt_file):
+        with open(gt_file, 'rb') as f:
+            time_data = pickle.load(f)
+            existing_time = time_data['max_time']
+        if current_max_time <= existing_time:
+            return existing_time
+    existing_time = np.nan
+    with open(gt_file, 'wb') as f:
+        print(f'Overwriting max time for {instance_name}.txt: existing: {existing_time}, current_max_time: {current_max_time}')
+        pickle.dump({'max_time': current_max_time}, f)
+        return current_max_time
+
+def try_get_min_dual_obj(dataset_name, instance_name, current_min_obj, offset = 0.0): # Minimum dual objective used to normalize relative gap.
     gt_dir = 'init_objs'
     os.makedirs(gt_dir, exist_ok = True)
     gt_file = os.path.join(gt_dir, dataset_name + instance_name + '.txt')
     if os.path.isfile(gt_file):
         with open(gt_file, 'rb') as f:
             existing_obj = np.load(f)
-            return existing_obj
+            return offset - existing_obj
     print(f'Warning: Written initial lower bound to disk for instance: {instance_name}. This should be coming from BDD solver.')
     #breakpoint() # should be coming from BDD solver initial lb.
     with open(gt_file, 'wb') as f:
-        np.save(f, current_min_obj)
+        np.save(f, offset - current_min_obj)
     return current_min_obj
 
 def clip_max(arr):
@@ -128,6 +155,29 @@ def clip_max(arr):
 
 def compute_relative_gaps(dual_obj_arr, min_dual_obj, max_dual_obj):
     return (max_dual_obj - dual_obj_arr)  / (max_dual_obj - min_dual_obj) 
+
+def compute_relative_gaps_integral(times, rel_gap, start_time, end_time):
+    assert np.all(np.diff(times) >= 0), 'times should be sorted.'
+    rel_gap[rel_gap > 1.0] = 1.0
+    rel_gap[rel_gap == np.NINF] = 0.0
+    try:
+        assert np.min(rel_gap) >= 0.0
+    except:
+        breakpoint()
+    if times[0] < start_time:
+        start_index =  np.where(times >= start_time)[0][0]
+        times = times[start_index:]
+        rel_gap = rel_gap[start_index:]
+    valid_region_integral = np.trapz(rel_gap, x = times)
+    # Add starting region area:
+    if start_time < times[0]:
+        starting_area = 0.5 * (times[0] - start_time) * (1.0 + rel_gap[0])
+        valid_region_integral = valid_region_integral + starting_area
+    # Add ending region area:
+    if end_time > times[-1]:
+        ending_area = 0.5 * (end_time - times[-1]) * (rel_gap[-1] + rel_gap[-1])
+        valid_region_integral = valid_region_integral + ending_area
+    return valid_region_integral
 
 def extrapolate_log(log_data, max_time, si):
     current_max_time = log_data[0, :].max()
@@ -148,10 +198,12 @@ def merge_logs(acc_sum_log, instance_log, si):
     acc_sum_log[2, :] = acc_sum_log[2, :] + instance_log[2, :]
     return acc_sum_log
 
-def parse_dataset(instance_dict, root_dir, suffix, si = 5):
+def parse_dataset(instance_dict, root_dir, suffix, si = 5, start_time_rel_gap_int = 0):
     max_time = 0
     acc_sum_log = None
     count = 0
+    sum_times = 0
+    rel_gap_int_sum = 0
     for dataset_name, instance_names in instance_dict.items():
         for instance_name_temp in instance_names:
             instance_name = instance_name_temp.strip()
@@ -167,15 +219,23 @@ def parse_dataset(instance_dict, root_dir, suffix, si = 5):
                 current_log, is_optimal = get_log_barrier(log_data)
             else:
                 assert(False)
-            if (len(current_log) <= 1):
-                print(f"Skipping: {instance_name}")
+            if current_log is None or (len(current_log) <= 1):
+                print(f"Skipping: {log_file}")
                 continue
             max_dual_obj = try_write_max_dual_obj(dataset_name, instance_name, np.max(current_log[:, 1]).item(), is_optimal)
             min_dual_obj = try_get_min_dual_obj(dataset_name, instance_name, np.min(current_log[:, 1]).item())
             current_log[:, 1] = clip_max(current_log[:, 1])
+            sum_times = sum_times + np.max(current_log[:, 0])
+
+            max_time_rel_gap_integral = try_write_max_time(dataset_name, instance_name, np.max(current_log[:, 0]))
+
             resampled, max_time = resample_log(current_log, si, max_time)
             resampled_rel_gaps = compute_relative_gaps(resampled[1:2, :], min_dual_obj, max_dual_obj)
             logs_instance = np.concatenate((resampled, resampled_rel_gaps), 0) # time, clipped dual obj, clipped relative dual gaps.
+
+            rel_gap_int = compute_relative_gaps_integral(logs_instance[0, :], logs_instance[2, :], start_time_rel_gap_int, max_time_rel_gap_integral)
+            rel_gap_int_sum += rel_gap_int
+
             if acc_sum_log is not None:
                 acc_sum_log = merge_logs(acc_sum_log, logs_instance, si)
             else:
@@ -183,6 +243,8 @@ def parse_dataset(instance_dict, root_dir, suffix, si = 5):
             count = count + 1
         acc_sum_log[1, :] /= count
         acc_sum_log[2, :] /= count 
+        sum_times /= count
+        rel_gap_int_sum /= count
         # Now get rid of -infinity lb and greater than 1.0 relative gaps.
         valid_start_indices = acc_sum_log[2, :] <= 1.0
         valid_acc_avg_log = acc_sum_log[:, valid_start_indices]
@@ -191,13 +253,16 @@ def parse_dataset(instance_dict, root_dir, suffix, si = 5):
         out_name = os.path.join(out_dir, os.path.splitext(suffix)[0][1:] + '.csv')
         f = open(out_name, 'w')
         writer = csv.writer(f, delimiter=',')
+        best_obj = valid_acc_avg_log[1, :].max()
         for i in range(valid_acc_avg_log.shape[1]):
-            writer.writerow([valid_acc_avg_log[0, i], valid_acc_avg_log[1, i], valid_acc_avg_log[2, i]])
+            writer.writerow([valid_acc_avg_log[0, i], valid_acc_avg_log[1, i], valid_acc_avg_log[2, i], best_obj, sum_times, rel_gap_int_sum])
         f.close()
 
-#parse_dataset(ct_instances, sp_root_dir, suffix_simplex, si = 5)
-#parse_dataset(worms_instances, sp_root_dir, suffix_simplex, si = 5)
-#parse_dataset(qaplib_small_instances, sp_root_dir, suffix_simplex, si = 5)
-#parse_dataset(qaplib_small_instances, sp_root_dir, suffix_barrier, si = 5)
-parse_dataset(ind_set_instances, is_root_dir, suffix_simplex, si = 2)
-#parse_dataset(mrf_pf_instances, mrf_pf_root_dir, suffix_simplex, si = 10)
+# parse_dataset(ct_instances, sp_root_dir, suffix_simplex, si = 5, start_time_rel_gap_int = 5)
+# parse_dataset(worms_instances, sp_root_dir, suffix_simplex, si = 5, start_time_rel_gap_int = 2.5)
+# parse_dataset(qaplib_small_instances, sp_root_dir, suffix_simplex, si = 5, start_time_rel_gap_int = 5)
+# parse_dataset(qaplib_small_instances, sp_root_dir, suffix_barrier, si = 5, start_time_rel_gap_int = 5)
+# parse_dataset(ind_set_instances, is_root_dir, suffix_simplex, si = 2, start_time_rel_gap_int = 0.1)
+# parse_dataset(mrf_pf_instances, mrf_pf_root_dir, suffix_simplex, si = 10, start_time_rel_gap_int = 10)
+parse_dataset(qaplib_all_instances, sp_root_dir, suffix_simplex, si = 5, start_time_rel_gap_int = 5)
+# parse_dataset(qaplib_med_lipa_instances, sp_root_dir, suffix_barrier, si = 5, start_time_rel_gap_int = 5) # does not perform iterations until timelimit.

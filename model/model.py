@@ -1,33 +1,36 @@
 import torch
 import torch.nn as nn
 from torch_scatter import scatter_sum, scatter_mean, scatter_max
-from torch_geometric.nn import TransformerConv, LayerNorm
+from torch_geometric.nn import TransformerConv #, LayerNorm
 import model.solver_utils as sol_utils
-#from model.layer_norm_old import LayerNorm
+from model.layer_norm_old import LayerNorm
 
 # https://github.com/rusty1s/pytorch_geometric/issues/1210 might be useful
 # https://pytorch-geometric.readthedocs.io/en/latest/modules/nn.html?highlight=meta%20layer#torch_geometric.nn.meta.MetaLayer
 class EdgeUpdater(torch.nn.Module):
     # Receives learned var, con, edge features and fixed edge features to predict new learned edge features.
-    def __init__(self, num_input_edge_channels, num_hidden_channels, num_output_edge_channels, num_var_channels, num_con_channels, num_hidden_layers = 0):
+    def __init__(self, num_input_edge_channels, num_hidden_channels, num_output_edge_channels, num_var_channels, num_con_channels, num_hidden_layers = 0, use_celu_activation = False):
         super(EdgeUpdater, self).__init__()
         # num_input_channels = num_var_channels + num_con_channels + num_input_edge_channels
-        self.var_compress_mlp = [nn.Linear(num_var_channels, num_hidden_channels), nn.ReLU(True)]
+        self.activation = nn.ReLU()
+        if use_celu_activation:
+            self.activation = nn.Softplus()
+        self.var_compress_mlp = [nn.Linear(num_var_channels, num_hidden_channels), self.activation]
         for l in range(num_hidden_layers + 1):
             self.var_compress_mlp.append(nn.Linear(num_hidden_channels, num_hidden_channels))
-            self.var_compress_mlp.append(nn.ReLU(True))       
+            self.var_compress_mlp.append(self.activation)       
         self.var_compress_mlp = nn.Sequential(*self.var_compress_mlp)
 
-        self.con_compress_mlp = [nn.Linear(num_con_channels, num_hidden_channels), nn.ReLU(True)]
+        self.con_compress_mlp = [nn.Linear(num_con_channels, num_hidden_channels), self.activation]
         for l in range(num_hidden_layers + 1):
             self.con_compress_mlp.append(nn.Linear(num_hidden_channels, num_hidden_channels))
-            self.con_compress_mlp.append(nn.ReLU(True))
+            self.con_compress_mlp.append(self.activation)
         self.con_compress_mlp = nn.Sequential(*self.con_compress_mlp)
 
-        self.edge_mlp = [nn.Linear(num_input_edge_channels + num_hidden_channels + num_hidden_channels, num_hidden_channels), nn.ReLU(True)]
+        self.edge_mlp = [nn.Linear(num_input_edge_channels + num_hidden_channels + num_hidden_channels, num_hidden_channels), self.activation]
         for l in range(num_hidden_layers):
             self.edge_mlp.append(nn.Linear(num_hidden_channels, num_hidden_channels))
-            self.edge_mlp.append(nn.ReLU(True))
+            self.edge_mlp.append(self.activation)
         self.edge_mlp.append(nn.Linear(num_hidden_channels, num_output_edge_channels))
         self.edge_mlp = nn.Sequential(*self.edge_mlp)
         # m = torch.normal(0.0, 1e-6, (num_learned_edge_channels, num_input_channels)) 
@@ -36,10 +39,11 @@ class EdgeUpdater(torch.nn.Module):
         # self.edge_mlp[0].weight.data = m
 
     def forward(self, var_f: torch.Tensor, con_f: torch.Tensor, combined_edge_f: torch.Tensor, edge_index_var_con: torch.Tensor):
+        var_f_c = var_f.clone()
+        con_f_c = con_f.clone()
         out = torch.cat([combined_edge_f, 
-                            self.var_compress_mlp(var_f)[edge_index_var_con[0], :], 
-                            self.con_compress_mlp(con_f)[edge_index_var_con[1], :]
-                        ], 1)
+                        self.var_compress_mlp(var_f_c)[edge_index_var_con[0], :], 
+                        self.con_compress_mlp(con_f_c)[edge_index_var_con[1], :]], 1)
         return self.edge_mlp(out)
 
 def compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, batch_index_con, con_lp_f, con_lp_f_names, norm_type = 'l2', epsilon = 1e-6, max_v = 1e6):
@@ -68,21 +72,38 @@ class FeatureExtractorLayer(torch.nn.Module):
                 num_edge_lp_f_with_ss, in_edge_dim, out_edge_dim,
                 use_layer_norm, use_def_mm = True, use_solver_costs = True,
                 use_net_solver_costs = False,
-                num_hidden_layers_edge = 0):
+                num_hidden_layers_edge = 0, use_celu_activation = False,
+                aggr = 'mean'):
         super(FeatureExtractorLayer, self).__init__()
 
         self.use_def_mm = use_def_mm
         self.use_solver_costs = use_solver_costs
+        self.activation = nn.ReLU()
+        if use_celu_activation:
+            self.activation = nn.Softplus()
+
         self.con_updater = TransformerConv((num_var_lp_f + in_var_dim, num_con_lp_f + in_con_dim), 
                                             out_con_dim, 
                                             edge_dim = num_edge_lp_f_with_ss + in_edge_dim, 
-                                            aggr = 'mean')
+                                            aggr = aggr)
+                                            
         self.var_updater = TransformerConv((out_con_dim + num_con_lp_f, num_var_lp_f + in_var_dim), 
                                             out_var_dim,
                                             edge_dim = num_edge_lp_f_with_ss + in_edge_dim, 
-                                            aggr = 'mean')
+                                            aggr = aggr)
 
-        self.edge_updater = EdgeUpdater(num_edge_lp_f_with_ss + in_edge_dim, out_edge_dim, out_edge_dim, out_var_dim + num_var_lp_f, out_con_dim + num_con_lp_f, num_hidden_layers_edge)
+                                            
+        # self.var_updater = TransformerConv((in_con_dim + num_con_lp_f, num_var_lp_f + in_var_dim), 
+        #                                     out_var_dim,
+        #                                     edge_dim = num_edge_lp_f_with_ss + in_edge_dim, 
+        #                                     aggr = aggr)
+
+        # self.con_updater = TransformerConv((num_var_lp_f + out_var_dim, num_con_lp_f + in_con_dim), 
+        #                                     out_con_dim, 
+        #                                     edge_dim = num_edge_lp_f_with_ss + in_edge_dim, 
+        #                                     aggr = aggr)
+
+        self.edge_updater = EdgeUpdater(num_edge_lp_f_with_ss + in_edge_dim, out_edge_dim, out_edge_dim, out_var_dim + num_var_lp_f, out_con_dim + num_con_lp_f, num_hidden_layers_edge, use_celu_activation)
         self.use_net_solver_costs = use_net_solver_costs
 
         if use_layer_norm:
@@ -117,15 +138,23 @@ class FeatureExtractorLayer(torch.nn.Module):
             edge_comb_f = torch.cat((edge_learned_f, edge_lp_f_wo_ss), 1)
 
         # 1. Update constraint features (var, constraint, edge -> constraint_new):
-        con_learned_f = torch.relu(self.con_norm(self.con_updater((var_comb_f, con_comb_f), edge_index_var_con, edge_comb_f), batch_index_con))
+        con_learned_f = self.activation(self.con_norm(self.con_updater((var_comb_f, con_comb_f), edge_index_var_con, edge_comb_f), batch_index_con))
         con_comb_f = self.combine_features(con_learned_f, con_lp_f)
 
         # 2. Update variable features (var, constraint_new, edge -> var):
-        var_learned_f = torch.relu(self.var_norm(self.var_updater((con_comb_f, var_comb_f), edge_index_var_con.flip([0]), edge_comb_f), batch_index_var))
+        var_learned_f = self.activation(self.var_norm(self.var_updater((con_comb_f, var_comb_f), edge_index_var_con.flip([0]), edge_comb_f), batch_index_var))
         var_comb_f = self.combine_features(var_learned_f, var_lp_f)
 
+        # # 1. Update variable features (var, constraint_new, edge -> var):
+        # var_learned_f = self.activation(self.var_norm(self.var_updater((con_comb_f, var_comb_f), edge_index_var_con.flip([0]), edge_comb_f), batch_index_var))
+        # var_comb_f = self.combine_features(var_learned_f, var_lp_f)
+
+        # # 2. Update constraint features (var, constraint, edge -> constraint_new):
+        # con_learned_f = self.activation(self.con_norm(self.con_updater((var_comb_f, con_comb_f), edge_index_var_con, edge_comb_f), batch_index_con))
+        # con_comb_f = self.combine_features(con_learned_f, con_lp_f)
+
         # 3. Update edges:
-        edge_learned_f = torch.relu(self.edge_norm(self.edge_updater(var_comb_f, con_comb_f, edge_comb_f, edge_index_var_con), batch_index_edge))
+        edge_learned_f = self.activation(self.edge_norm(self.edge_updater(var_comb_f, con_comb_f, edge_comb_f, edge_index_var_con), batch_index_edge))
 
         return var_learned_f, con_learned_f, edge_learned_f
 
@@ -138,7 +167,7 @@ def get_edge_mask_without_terminal_nodes(edge_index_var_con, var_degree):
 class FeatureExtractor(torch.nn.Module):
     def __init__(self, num_var_lp_f, out_var_dim, num_con_lp_f, out_con_dim, num_edge_lp_f, out_edge_dim, depth, 
                 use_layer_norm = False, use_def_mm = True, num_hidden_layers_edge = 0, use_net_solver_costs = False,
-                takes_learned_features = False):
+                takes_learned_features = False, use_celu_activation = False, aggr = 'mean'):
         super(FeatureExtractor, self).__init__()
         self.num_var_lp_f = num_var_lp_f
         self.num_con_lp_f = num_con_lp_f
@@ -160,7 +189,9 @@ class FeatureExtractor(torch.nn.Module):
                                 num_edge_lp_f_with_ss, self.in_edge_dim, out_edge_dim,
                                 use_layer_norm, use_def_mm, 
                                 num_hidden_layers_edge = num_hidden_layers_edge,
-                                use_net_solver_costs = use_net_solver_costs)
+                                use_net_solver_costs = use_net_solver_costs,
+                                use_celu_activation = use_celu_activation,
+                                aggr = aggr)
         ]
         for l in range(depth - 1):
             layers.append(
@@ -169,7 +200,9 @@ class FeatureExtractor(torch.nn.Module):
                                     num_edge_lp_f_with_ss, out_edge_dim, out_edge_dim,
                                     use_layer_norm, use_def_mm,
                                     num_hidden_layers_edge = num_hidden_layers_edge,
-                                    use_net_solver_costs = use_net_solver_costs)
+                                    use_net_solver_costs = use_net_solver_costs,
+                                    use_celu_activation = use_celu_activation,
+                                    aggr = aggr)
             )
         self.layers = torch.nn.ModuleList(layers)
 
@@ -219,8 +252,8 @@ class PrimalPerturbationBlock(torch.nn.Module):
         if use_lstm_var:
             self.var_lstm = nn.LSTMCell(var_dim, var_dim)
             in_var_dim += var_dim
-        self.var_pert_predictor = nn.Sequential(nn.Linear(in_var_dim, 2 * var_dim), nn.ReLU(True), 
-                                                nn.Linear(2 * var_dim, var_dim), nn.ReLU(True), 
+        self.var_pert_predictor = nn.Sequential(nn.Linear(in_var_dim, 2 * var_dim), self.activation, 
+                                                nn.Linear(2 * var_dim, var_dim), self.activation, 
                                                 nn.Linear(var_dim, 1))
         
     def forward(self, solvers, var_lp_f, con_lp_f, orig_solver_state, norm_orig_solver_state, edge_lp_f_wo_ss, 
@@ -290,7 +323,7 @@ class DualDistWeightsBlock(torch.nn.Module):
     def __init__(self, var_lp_f_names, con_lp_f_names, edge_lp_f_names, depth, var_dim, con_dim, edge_dim, history_num_itr = 20,
                 use_layer_norm = False, predict_dist_weights = False, predict_omega = False, num_hidden_layers_edge = 0, 
                 use_net_solver_costs = False, use_lstm_var = False, free_update = False, free_update_loss_weight = 0.0,
-                denormalize_free_update = False):
+                denormalize_free_update = False, scale_free_update = False, use_celu_activation = False, aggr = 'mean'):
         super(DualDistWeightsBlock, self).__init__()
         self.var_lp_f_names = var_lp_f_names
         self.con_lp_f_names = con_lp_f_names
@@ -299,15 +332,19 @@ class DualDistWeightsBlock(torch.nn.Module):
         self.num_con_lp_f = len(con_lp_f_names)
         self.num_edge_lp_f_with_ss = len(edge_lp_f_names) + 3 - int(use_net_solver_costs)
         self.use_net_solver_costs = use_net_solver_costs
-        self.feature_extractor = FeatureExtractor(self.num_var_lp_f, var_dim, self.num_con_lp_f, con_dim, len(edge_lp_f_names), edge_dim, 
-                                                depth, use_layer_norm, use_def_mm = True, num_hidden_layers_edge = num_hidden_layers_edge,
-                                                use_net_solver_costs = use_net_solver_costs)
+        self.use_gnn = depth > 0
+        if self.use_gnn:
+            self.feature_extractor = FeatureExtractor(self.num_var_lp_f, var_dim, self.num_con_lp_f, con_dim, len(edge_lp_f_names), edge_dim, 
+                                                    depth, use_layer_norm, use_def_mm = True, num_hidden_layers_edge = num_hidden_layers_edge,
+                                                    use_net_solver_costs = use_net_solver_costs, use_celu_activation = use_celu_activation, aggr = aggr)
+            
         self.history_num_itr = history_num_itr
         self.predict_dist_weights = predict_dist_weights
         self.predict_omega = predict_omega
         self.free_update = free_update
         self.free_update_loss_weight = free_update_loss_weight
         self.denormalize_free_update = denormalize_free_update
+        self.scale_free_update = scale_free_update
         self.maintain_feasibility = False
         assert free_update_loss_weight >= 0
         assert free_update_loss_weight <= 1.0
@@ -324,12 +361,19 @@ class DualDistWeightsBlock(torch.nn.Module):
         if use_lstm_var:
             self.var_lstm = nn.LSTMCell(var_dim, var_dim)
             in_var_dim += var_dim
-        self.subgradient_step_size = torch.nn.Parameter(torch.zeros(1) + 5e-4) #WORMS need 1e-4, MIS 1e-3
-        #self.subgradient_step_size = torch.zeros(1) + 1e-4
-        self.dist_weights_predictor = EdgeUpdater(self.num_edge_lp_f_with_ss + edge_dim, edge_dim, num_outputs, 
-                                            self.num_var_lp_f + in_var_dim, 
-                                            self.num_con_lp_f + con_dim,
-                                            num_hidden_layers_edge)
+        self.subgradient_step_size = torch.nn.Parameter(torch.zeros(1) + 5e-4)
+        if self.use_gnn:
+            self.dist_weights_predictor = EdgeUpdater(self.num_edge_lp_f_with_ss + edge_dim, edge_dim, num_outputs, 
+                                                self.num_var_lp_f + in_var_dim, 
+                                                self.num_con_lp_f + con_dim,
+                                                num_hidden_layers_edge, 
+                                                use_celu_activation)
+        else:
+            self.dist_weights_predictor = EdgeUpdater(self.num_edge_lp_f_with_ss, edge_dim, num_outputs, 
+                                                self.num_var_lp_f, 
+                                                self.num_con_lp_f,
+                                                num_hidden_layers_edge, 
+                                                use_celu_activation)
 
     def forward(self, solvers, var_lp_f, con_lp_f, 
                 solver_state, edge_lp_f_wo_ss, 
@@ -341,28 +385,41 @@ class DualDistWeightsBlock(torch.nn.Module):
         assert(not randomize_num_itrs)
         if self.use_net_solver_costs:
             net_solver_state, con_lp_f, norm_edge = compute_normalized_solver_costs_for_dual(solver_state, batch_index_edge, batch_index_con, con_lp_f, self.con_lp_f_names, 'inf')
-            var_learned_f, con_learned_f, edge_learned_f = self.feature_extractor(var_lp_f, con_lp_f, net_solver_state, edge_lp_f_wo_ss, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge)
-        else:
-            var_learned_f, con_learned_f, edge_learned_f = self.feature_extractor(var_lp_f, con_lp_f, solver_state, edge_lp_f_wo_ss, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge)
+        if self.use_gnn:
+            if self.use_net_solver_costs:
+                var_learned_f, con_learned_f, edge_learned_f = self.feature_extractor(var_lp_f, con_lp_f, net_solver_state, edge_lp_f_wo_ss, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge)
+            else:
+                var_learned_f, con_learned_f, edge_learned_f = self.feature_extractor(var_lp_f, con_lp_f, solver_state, edge_lp_f_wo_ss, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge)
 
-        if self.var_lstm is not None:
-            lstm_h, lstm_c = self.var_lstm(var_learned_f, (var_hidden_states_lstm['h'], var_hidden_states_lstm['c']))
-            var_hidden_states_lstm['h'] = lstm_h
-            var_hidden_states_lstm['c'] = lstm_c
-            var_features = torch.cat((var_learned_f, var_lp_f, lstm_h), 1)
-        else:
-            var_features = torch.cat((var_learned_f, var_lp_f), 1)
+            if self.var_lstm is not None:
+                lstm_h, lstm_c = self.var_lstm(var_learned_f, (var_hidden_states_lstm['h'], var_hidden_states_lstm['c']))
+                var_hidden_states_lstm['h'] = lstm_h
+                var_hidden_states_lstm['c'] = lstm_c
+                var_features = torch.cat((var_learned_f, var_lp_f, lstm_h), 1)
+            else:
+                var_features = torch.cat((var_learned_f, var_lp_f), 1)
 
-        if not self.use_net_solver_costs:
-            predictions = self.dist_weights_predictor(
-                var_features, torch.cat((con_learned_f, con_lp_f), 1),
-                torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_lp_f_wo_ss), 1), 
-                edge_index_var_con)
+            if not self.use_net_solver_costs:
+                predictions = self.dist_weights_predictor(
+                    var_features, torch.cat((con_learned_f, con_lp_f), 1),
+                    torch.cat((edge_learned_f, solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_lp_f_wo_ss), 1), 
+                    edge_index_var_con)
+            else:
+                predictions = self.dist_weights_predictor(
+                    var_features, torch.cat((con_learned_f, con_lp_f), 1),
+                    torch.cat((edge_learned_f, net_solver_state['norm_cost'].unsqueeze(1), net_solver_state['norm_def_mm'].unsqueeze(1), edge_lp_f_wo_ss), 1), 
+                    edge_index_var_con)
         else:
-            predictions = self.dist_weights_predictor(
-                var_features, torch.cat((con_learned_f, con_lp_f), 1),
-                torch.cat((edge_learned_f, net_solver_state['norm_cost'].unsqueeze(1), net_solver_state['norm_def_mm'].unsqueeze(1), edge_lp_f_wo_ss), 1), 
-                edge_index_var_con)
+            if self.use_net_solver_costs:
+                predictions = self.dist_weights_predictor(
+                    var_lp_f, con_lp_f,
+                    torch.cat((net_solver_state['norm_cost'].unsqueeze(1), net_solver_state['norm_def_mm'].unsqueeze(1), edge_lp_f_wo_ss), 1), 
+                    edge_index_var_con)
+            else:
+                predictions = self.dist_weights_predictor(
+                    var_lp_f.clone(), con_lp_f.clone(),
+                    torch.cat((solver_state['lo_costs'].unsqueeze(1), solver_state['hi_costs'].unsqueeze(1), solver_state['def_mm'].unsqueeze(1), edge_lp_f_wo_ss.clone()), 1), 
+                    edge_index_var_con)
 
         if self.predict_dist_weights:
             dist_weights = predictions[:, 0]
@@ -379,6 +436,11 @@ class DualDistWeightsBlock(torch.nn.Module):
         if self.free_update:
             update = predictions[:, int(self.predict_dist_weights)] * torch.abs(self.subgradient_step_size.to(var_lp_f.device))
             update = (update - scatter_mean(update.to(torch.float64), edge_index_var_con[0])[edge_index_var_con[0]]).to(torch.get_default_dtype())
+            if 'lb_change_free_update' in self.con_lp_f_names and self.scale_free_update:
+                lb_change_per_con = con_lp_f[:, self.con_lp_f_names.index('lb_change_free_update')]
+                lb_change_per_edge = lb_change_per_con[edge_index_var_con[1]]
+                mean_lb_change_per_var = scatter_mean(lb_change_per_edge, edge_index_var_con[0])
+                update = update * mean_lb_change_per_var[edge_index_var_con[0]]
             if self.use_net_solver_costs and self.denormalize_free_update:
                 update = norm_edge * update
             # try:
@@ -393,6 +455,11 @@ class DualDistWeightsBlock(torch.nn.Module):
                 counts = scatter_sum(torch.ones_like(solver_state_dd['hi_costs']), edge_index_var_con[0])
                 objective_diff = (objective_diff / counts).to(torch.get_default_dtype())
                 solver_state['hi_costs'] = solver_state['hi_costs'] + objective_diff[edge_index_var_con[0]]
+
+            if 'lb_change_free_update' in self.con_lp_f_names:
+                con_lp_f[:, self.con_lp_f_names.index('lb_change_free_update')] = (
+                    sol_utils.compute_per_bdd_lower_bound(solvers, solver_state) - con_lp_f[:, self.con_lp_f_names.index('lb')])
+
             if self.free_update_loss_weight > 0 and update.requires_grad:
                 solver_state_dd = sol_utils.distribute_delta(solvers, solver_state)
                 lb_after_dist_free_update = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state_dd)

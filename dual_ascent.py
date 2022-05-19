@@ -2,7 +2,7 @@ import torch
 from torch_scatter.scatter import scatter_mean, scatter_sum
 from pytorch_lightning.core.lightning import LightningModule
 from typing import List, Set, Dict, Tuple, Optional
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 import logging, os, time
 import numpy as np
 from model.model import FeatureExtractor, DualDistWeightsBlock, DualFullCoordinateAscent
@@ -48,7 +48,11 @@ class DualAscentBDD(LightningModule):
                 predict_dist_weights: Optional[bool] = True,
                 predict_omega: Optional[bool] = True,
                 free_update: Optional[bool] = False,
+                scale_free_update: Optional[bool] = False,
                 denormalize_free_update: Optional[bool] = False,
+                use_celu_activation: Optional[bool] = False,
+                mp_aggr: Optional[str] = 'mean',
+                use_separate_model_later_stage: Optional[bool] = False,
                 full_coordinate_ascent: Optional[bool] = False,
                 val_datanames: Optional[List[str]] = None,
                 test_datanames: Optional[List[str]] = None,
@@ -88,17 +92,20 @@ class DualAscentBDD(LightningModule):
                 'optimizer_name',
                 'full_coordinate_ascent',
                 'free_update_loss_weight',
+                'use_separate_model_later_stage',
                 'predict_dist_weights',
                 'predict_omega',
                 'free_update',
                 'denormalize_free_update',
+                'use_celu_activation',
+                'mp_aggr',
+                'scale_free_update',
                 'use_net_solver_costs',
                 'start_episodic_training_after_epoch',
                 'num_journeys',
                 'val_fraction',
                 'val_datanames',
                 'test_datanames')
-
         if not full_coordinate_ascent:
             self.dual_block = DualDistWeightsBlock(
                             var_lp_f_names = var_lp_features,
@@ -117,7 +124,32 @@ class DualAscentBDD(LightningModule):
                             free_update = free_update,
                             history_num_itr = num_dual_iter_train,
                             free_update_loss_weight = free_update_loss_weight,
-                            denormalize_free_update = denormalize_free_update)
+                            denormalize_free_update = denormalize_free_update,
+                            scale_free_update = scale_free_update,
+                            use_celu_activation = use_celu_activation,
+                            aggr = mp_aggr)
+            if use_separate_model_later_stage:
+                self.dual_block_later = DualDistWeightsBlock(
+                                        var_lp_f_names = var_lp_features,
+                                        con_lp_f_names = con_lp_features, 
+                                        edge_lp_f_names = edge_lp_features,
+                                        depth = dual_predictor_depth,
+                                        var_dim = num_learned_var_f, 
+                                        con_dim = num_learned_con_f,
+                                        edge_dim = num_learned_edge_f,
+                                        use_layer_norm = use_layer_norm,
+                                        predict_dist_weights = predict_dist_weights,
+                                        predict_omega = predict_omega,
+                                        num_hidden_layers_edge = num_hidden_layers_edge,
+                                        use_net_solver_costs = use_net_solver_costs,
+                                        use_lstm_var = use_lstm_var,
+                                        free_update = free_update,
+                                        history_num_itr = num_dual_iter_train,
+                                        free_update_loss_weight = free_update_loss_weight,
+                                        denormalize_free_update = denormalize_free_update,
+                                        scale_free_update = scale_free_update,
+                                        use_celu_activation = use_celu_activation,
+                                        aggr = mp_aggr)
         else:
             self.dual_block = DualFullCoordinateAscent(
                             var_lp_f_names = var_lp_features,
@@ -185,7 +217,11 @@ class DualAscentBDD(LightningModule):
             loss_margin = cfg.TRAIN.LOSS_MARGIN,
             omega_initial = cfg.MODEL.OMEGA_INITIAL,
             free_update = cfg.MODEL.FREE_UPDATE,
+            free_update_loss_weight = cfg.TRAIN.FREE_UPDATE_LOSS_WEIGHT,
+            scale_free_update = cfg.MODEL.SCALE_FREE_UPDATE,
             denormalize_free_update = cfg.MODEL.DENORM_FREE_UPDATE,
+            use_celu_activation = cfg.MODEL.USE_CELU_ACTIVATION,
+            mp_aggr = cfg.MODEL.MP_AGGR,
             num_learned_var_f = cfg.MODEL.VAR_FEATURE_DIM, 
             num_learned_con_f = cfg.MODEL.CON_FEATURE_DIM,
             num_learned_edge_f = cfg.MODEL.EDGE_FEATURE_DIM,
@@ -202,11 +238,16 @@ class DualAscentBDD(LightningModule):
             non_learned_updates_test = non_learned_updates_test,
             only_test_non_learned = only_test_non_learned,
             test_primal = test_primal,
-            num_journeys = cfg.TRAIN.NUM_JOURNEYS)
+            num_journeys = cfg.TRAIN.NUM_JOURNEYS,
+            use_separate_model_later_stage = cfg.MODEL.USE_SEPARATE_MODEL_LATER_STAGE)
 
     def configure_optimizers(self):
         if self.hparams.optimizer_name == 'Adam':
+            print("Using Adam optimizer.")
             return Adam(self.parameters(), lr=self.hparams.lr)
+        elif self.hparams.optimizer_name == 'SGD':
+            print("Using SGD optimizer.")
+            return SGD(self.parameters(), lr=self.hparams.lr, momentum = 0.9, dampening = 0.9)
         else:
             raise ValueError(f'Optimizer {self.hparams.optimizer_name} not exposed.')
 
@@ -244,10 +285,13 @@ class DualAscentBDD(LightningModule):
         if fraction < 0:
             return max(0, self.hparams.num_train_rounds_with_grad - 1)
         fraction = fraction % 1
-        fraction = fraction * fraction
+        if not self.hparams.use_separate_model_later_stage:
+            fraction = fraction * fraction
         mean_start_step = fraction * (self.hparams.num_train_rounds) # self.hparams.num_train_rounds // 5 was previously 3.
         proposed_start_step = np.round(np.random.normal(mean_start_step, self.hparams.num_train_rounds // 5)).astype(np.int32).item(0)
         proposed_start_step = max(max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0), self.hparams.num_train_rounds_with_grad - 1)
+        # if proposed_start_step < 10 and np.random.rand(1) > 0.5: # DOGE and DOGE-M on worms was computed by this additional randomization.
+        #     return max(0, self.hparams.num_train_rounds_with_grad - 1)
         self.logger.experiment.add_scalar('train/start_grad_round', proposed_start_step, global_step = self.global_step)
         return proposed_start_step
 
@@ -437,11 +481,15 @@ class DualAscentBDD(LightningModule):
             rel_gap = 100.0 * torch.square(numer / (1e-4 + denom))  # Focus more on larger gaps so taking square.
             return rel_gap.sum()
 
-    def single_dual_round(self, batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, return_best_dual = False, current_max_lb = None, best_solver_state = None, randomize_num_itrs = False):
+    def single_dual_round(self, batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, 
+                        return_best_dual = False, current_max_lb = None, best_solver_state = None, randomize_num_itrs = False, use_later_dual_block = False):
         lb_after_free_update = None
-        randomize_num_itrs = False #TODO: Currently not randomizing until the implementation is good.
+        randomize_num_itrs = False # Not randomizing until the implementation is good.
         if not self.hparams.full_coordinate_ascent:
-            new_solver_state, batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f, dist_weights, omega_vec, batch.var_hidden_states_lstm, lb_after_free_update = self.dual_block(
+            dual_block = self.dual_block
+            if use_later_dual_block:
+                dual_block = self.dual_block_later
+            new_solver_state, batch.var_lp_f, batch.con_lp_f, batch.edge_rest_lp_f, dist_weights, omega_vec, batch.var_hidden_states_lstm, lb_after_free_update = dual_block(
                                                                     batch.solvers, batch.var_lp_f, batch.con_lp_f, 
                                                                     batch.solver_state, batch.edge_rest_lp_f, 
                                                                     batch.omega, batch.edge_index_var_con,
@@ -485,7 +533,11 @@ class DualAscentBDD(LightningModule):
         initial_lb_change = 0
         best_solver_state = None
         lb_after_free_update = None
+        use_later_dual_block = False
         for r in range(num_rounds):
+            if is_training and self.hparams.use_separate_model_later_stage and r >= self.hparams.num_train_rounds // 2:
+                use_later_dual_block = True
+
             if 'round_index' in self.hparams.con_lp_features:
                 batch.con_lp_f[:, self.hparams.con_lp_features.index('round_index')] = r
             grad_enabled = r >= num_rounds - self.hparams.num_train_rounds_with_grad and is_training
@@ -493,39 +545,44 @@ class DualAscentBDD(LightningModule):
                 if not non_learned_updates:
                     batch, dist_weights, omega_vec, best_solver_state, current_max_lb, lb_after_free_update = self.single_dual_round(
                                                                                                             batch, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, 
-                                                                                                            return_best_dual, current_max_lb, best_solver_state, is_training)
-                    if instance_log_name is not None:
-                        self.log_dist_weights(dist_weights, instance_log_name, batch.edge_index_var_con, (r + 1) * num_dual_iterations)
-                        self.log_omega_vector(omega_vec, instance_log_name, batch.edge_index_var_con, (r + 1) * num_dual_iterations)
+                                                                                                            return_best_dual, current_max_lb, best_solver_state, is_training,
+                                                                                                            use_later_dual_block = use_later_dual_block)
+                    # if instance_log_name is not None:
+                    #     self.log_dist_weights(dist_weights, instance_log_name, batch.edge_index_var_con, (r + 1) * num_dual_iterations)
+                    #     self.log_omega_vector(omega_vec, instance_log_name, batch.edge_index_var_con, (r + 1) * num_dual_iterations)
                 else:
                     with torch.no_grad():
                         batch = sol_utils.non_learned_updates(batch, self.hparams.edge_lp_features, num_dual_iterations, improvement_slope = 0.0, omega = batch.omega.item())
 
-                if self.hparams.free_update_loss_weight < 1.0:
-                    lb_after_dist = sol_utils.compute_per_bdd_lower_bound(batch.solvers, sol_utils.distribute_delta(batch.solvers, batch.solver_state))
-                    current_loss = (1.0 - self.hparams.free_update_loss_weight) * self.dual_loss_lb(lb_after_dist, batch.batch_index_con, batch.initial_lb_per_instance, gt_obj_normalized)
-                else:
-                    current_loss = 0
-                if lb_after_free_update is not None:
-                    current_loss = current_loss + self.hparams.free_update_loss_weight * self.dual_loss_lb(lb_after_free_update, batch.batch_index_con, batch.initial_lb_per_instance, gt_obj_normalized)
+                lb_after_dist = sol_utils.compute_per_bdd_lower_bound(batch.solvers, sol_utils.distribute_delta(batch.solvers, batch.solver_state))
                 with torch.no_grad():
                     logs.append({'r' : r + 1, 'lb_per_instance': scatter_sum(lb_after_dist, batch.batch_index_con), 't': time.time()})
-                if current_loss is not None:
+                if self.hparams.free_update_loss_weight < 1.0:
+                    current_loss = (1.0 - self.hparams.free_update_loss_weight) * self.dual_loss_lb(lb_after_dist, batch.batch_index_con, batch.initial_lb_per_instance, gt_obj_normalized)
                     logs[-1]['loss'] = current_loss.detach()
+                elif lb_after_free_update is not None:
+                    current_loss = current_loss + self.hparams.free_update_loss_weight * self.dual_loss_lb(lb_after_free_update, batch.batch_index_con, batch.initial_lb_per_instance, gt_obj_normalized)
+                    logs[-1]['loss'] = current_loss.detach()
+                if current_loss is not None: 
                     loss = loss + torch.pow(torch.tensor(self.hparams.loss_discount_factor), num_rounds - r - 1) * current_loss
             # if not is_training and instance_log_name is not None:
             #     device = batch.solver_state['hi_costs'].device
             #     max_diff, mean_diff = sol_utils.dual_feasbility_check(batch.solvers, solver_state, batch.objective.to(device), batch.num_vars)
             #     self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check', max_diff, global_step = (r + 1) * num_dual_iterations)
             #     self.logger.experiment.add_scalar(f'{instance_log_name}/feasibility_check_mean', mean_diff, global_step = (r + 1) * num_dual_iterations)
-            if not grad_enabled:
+            if not is_training:
                 lb_prev_round = current_non_grad_lb_per_instance
                 current_non_grad_lb_per_instance = logs[-1]['lb_per_instance']
                 if r == 1:
                     initial_lb_change = current_non_grad_lb_per_instance - lb_prev_round
                 last_lb_change = current_non_grad_lb_per_instance - lb_prev_round
-                rel_improvement = last_lb_change / (initial_lb_change * 1e-12)
-                if not is_training and (initial_lb > current_non_grad_lb_per_instance):
+                rel_improvement = last_lb_change / initial_lb_change
+                if (self.hparams.use_separate_model_later_stage and not use_later_dual_block and
+                    (rel_improvement < 1e-6 or r >= num_rounds // 2)):
+                    print(f'Switching to later dual stage at round: {r} / {num_rounds}.')
+                    use_later_dual_block = True
+                    continue
+                if initial_lb > current_non_grad_lb_per_instance:
                     print(f'\n Early termination. last_lb_change: {last_lb_change}, initial_lb_change: {initial_lb_change}, rel_improvement: {rel_improvement}')
                     for r_fake in range(r + 1, num_rounds):
                         logs.append({'r' : r_fake + 1, 'lb_per_instance': logs[-1]['lb_per_instance'], 't': time.time()})
@@ -534,11 +591,13 @@ class DualAscentBDD(LightningModule):
                     break
 
         if is_training:
+            # for (filepath, lb_inst) in zip(batch.file_path, logs[-1]['lb_per_instance']):
+            #     filename = os.path.basename(filepath)
+            #     self.logger.experiment.add_scalar(f'train/lb_{filename}', lb_inst, global_step = self.global_step)
+
             self.logger.experiment.add_scalar('train/dist_weights_edge_mlp_w_mean', self.dual_block.dist_weights_predictor.edge_mlp[2].weight[0].mean(), global_step = self.global_step)
             self.logger.experiment.add_scalar('train/dist_weights_edge_mlp_w_std', self.dual_block.dist_weights_predictor.edge_mlp[2].weight[0].std(), global_step = self.global_step)
             self.logger.experiment.add_scalar('train/subgradient_step_size', torch.abs(self.dual_block.subgradient_step_size[0]).item(), global_step = self.global_step)
-            min_lb_change_per_instance = torch.min(logs[-1]['lb_per_instance'] - current_non_grad_lb_per_instance)
-            self.logger.experiment.add_scalar('train/min_lb_change_per_instance', min_lb_change_per_instance, global_step = self.global_step)
             if 'lb_first_order_avg' in self.hparams.con_lp_features:
                 self.logger.experiment.add_scalar('train/mean_lb_first_order_avg', torch.mean(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb_first_order_avg')]), global_step = self.global_step)
             if 'lb_sec_order_avg' in self.hparams.con_lp_features:

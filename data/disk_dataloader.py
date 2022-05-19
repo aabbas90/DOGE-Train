@@ -164,5 +164,9 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
             bdd_repr, gt_info, lp_path = self._get_from_disk(index)
         graph = create_graph_from_bdd_repr(bdd_repr, gt_info, lp_path)
         torch.set_default_dtype(orig_dtype)
+        # if not self.need_gt:
+        #     gt_info['lp_stats'] = {'time': None, 'obj': None, 'sol_dict': None, 'sol': None}  
+        # if not self.need_ilp_gt:
+        #     gt_info['ilp_stats'] = {'time': None, 'obj': None, 'sol_dict': None, 'sol': None}
         return graph
 

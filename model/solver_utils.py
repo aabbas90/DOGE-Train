@@ -92,6 +92,9 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     batch.con_lp_f = set_features('rhs', con_lp_f_names, batch.con_lp_f, batch.rhs_vector.to(device))
     batch.con_lp_f = set_features('lb', con_lp_f_names, batch.con_lp_f, per_bdd_lb)
     batch.con_lp_f = set_features('prev_lb', con_lp_f_names, batch.con_lp_f, prev_per_bdd_lb)
+    if 'lb_change' in con_lp_f_names:
+        batch.con_lp_f = set_features('lb_change', con_lp_f_names, batch.con_lp_f, per_bdd_lb - prev_per_bdd_lb)
+
     if 'lb_first_order_avg' in con_lp_f_names:
         assert compute_history_for_itrs >= 2
         assert num_iterations >= 2

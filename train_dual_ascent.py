@@ -54,7 +54,7 @@ def find_ckpt(root_dir, ckpt_rel_path, find_best_ckpt = False):
     versions = os.path.join(root_dir, 'default')
     if not os.path.isdir(versions):
         return None
-    for folder in os.listdir(versions):
+    for folder in sorted(os.listdir(versions)):
         ckpt_folder = os.path.join(versions, folder, 'checkpoints')
         if not find_best_ckpt:
             possible_path = os.path.join(ckpt_folder, 'last.ckpt')
@@ -109,13 +109,14 @@ def main(args):
                     track_grad_norm=2,
                     gradient_clip_val=cfg.TRAIN.GRAD_CLIP_VAL,
                     callbacks=[checkpoint_callback, early_stopping],
-                    detect_anomaly = True)
+                    detect_anomaly = False)
 
     combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg, 
                                                                                         skip_dual_solved = True, 
                                                                                         test_only = args.eval_only, 
                                                                                         test_precision_double = not args.test_precision_float,
-                                                                                        test_on_train = args.test_on_train)
+                                                                                        test_on_train = args.test_on_train,
+                                                                                        train_precision_double = args.train_precision_double)
     if 'SLURM_JOB_ID' in os.environ:
         job_id = os.environ['SLURM_JOB_ID']
         job_file_path = f'out_dual/slurm_new/{job_id}.out'
@@ -144,7 +145,13 @@ def main(args):
             only_test_non_learned = args.only_test_non_learned,
             test_primal = args.test_primal)
     if not args.eval_only:
-        model = model.to(torch.float32) # If loading pre-trained checkpoint and resuming training then train in fp32.
+        if args.train_precision_double:
+            torch.set_default_dtype(torch.float64)
+            model = model.to(torch.float64)
+        else:
+            torch.set_default_dtype(torch.float32)
+            model = model.to(torch.float32)
+
         trainer.fit(model, combined_train_loader, val_loaders)
         save_best_ckpt_cfg(cfg, output_dir, checkpoint_callback.best_model_path)
         model = DualAscentBDD.load_from_checkpoint(checkpoint_callback.best_model_path,
@@ -157,7 +164,10 @@ def main(args):
             test_primal = args.test_primal)
         combined_train_loader = None
         val_loaders = None
-        if not args.test_precision_float:
+        if args.test_precision_float:
+            model = model.to(torch.float32)
+            torch.set_default_dtype(torch.float32)
+        else:
             model = model.to(torch.float64)
             torch.set_default_dtype(torch.float64)
         model.eval()
@@ -180,6 +190,7 @@ if __name__ == "__main__":
     parser.add_argument("--test-primal", action="store_true", help="Run FastDOG primal rounding after dual converged.")
     parser.add_argument("--test-precision-float", action="store_true", help="Performs testing in FP32 format. Recommended to not set due to numerical issues in FP32.")
     parser.add_argument("--test-on-train", action="store_true", help="Performs testing on training data.")
+    parser.add_argument('--train-precision-double', action="store_true", help="double precision training.")
     parser.add_argument(
         "opts",
         help="Modify config options by adding 'KEY VALUE' pairs at the end of the command. ",

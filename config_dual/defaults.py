@@ -40,8 +40,8 @@ cfg.MODEL.OMEGA_INITIAL = 0.5
 cfg.MODEL.USE_LAYER_NORM = True
 cfg.MODEL.VAR_LP_FEATURES = ['obj', 'deg']
 cfg.MODEL.VAR_LP_FEATURES_INIT = ['obj', 'deg']
-cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg']
-cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg']
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg', 'lb_change_free_update']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg', 'lb_change']
 # cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'dist_weights', 'prev_sol_avg', 'omega', 'mm_diff'] 
 # cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'dist_weights', 'prev_sol_avg', 'omega', 'mm_diff']
 cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff'] 
@@ -51,9 +51,12 @@ cfg.MODEL.USE_NET_SOLVER_COSTS = False
 cfg.MODEL.USE_LSTM_VAR = False
 cfg.MODEL.FREE_UPDATE = False
 cfg.MODEL.DENORM_FREE_UPDATE = False
+cfg.MODEL.SCALE_FREE_UPDATE = False
+cfg.MODEL.USE_CELU_ACTIVATION = False
+cfg.MODEL.USE_SEPARATE_MODEL_LATER_STAGE = False
+cfg.MODEL.MP_AGGR = 'mean'
 
 cfg.DATA = CN()
-
 # Number of workers for data loader
 cfg.DATA.DISK_DATA_ROOT = '/home/ahabbas/data/learnDBCA/cv_structure_pred/'
 cfg.DATA.NUM_WORKERS = 0
