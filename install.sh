@@ -7,3 +7,6 @@ conda install -c conda-forge tqdm
 # conda install h5py
 
 conda install -c conda-forge torchmetrics
+
+cd external/BDD/BDD-main
+python setup.py install
