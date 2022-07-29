@@ -290,8 +290,8 @@ class DualAscentBDD(LightningModule):
         mean_start_step = fraction * (self.hparams.num_train_rounds) # self.hparams.num_train_rounds // 5 was previously 3.
         proposed_start_step = np.round(np.random.normal(mean_start_step, self.hparams.num_train_rounds // 5)).astype(np.int32).item(0)
         proposed_start_step = max(max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0), self.hparams.num_train_rounds_with_grad - 1)
-        # if proposed_start_step < 10 and np.random.rand(1) > 0.5: # DOGE and DOGE-M on worms was computed by this additional randomization.
-        #     return max(0, self.hparams.num_train_rounds_with_grad - 1)
+        if proposed_start_step < 3 and np.random.rand(1) > 0.5: # DOGE and DOGE-M on worms was computed by this additional randomization.
+            return max(0, self.hparams.num_train_rounds_with_grad - 1)
         self.logger.experiment.add_scalar('train/start_grad_round', proposed_start_step, global_step = self.global_step)
         return proposed_start_step
 

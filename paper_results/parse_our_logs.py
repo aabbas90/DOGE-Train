@@ -185,8 +185,9 @@ def get_log_values(log_data, start_line, metric_prefix = 'pred_itr_'):
         line_strip = line.strip()
         if line_strip.startswith(metric_prefix):
             k, val = line_strip.split(':')
-            _, wall_time = k.split('_time_')
-            collected_data.append([float(wall_time), float(val)])
+            prefix_itr, wall_time = k.split('_time_')
+            _, itr = prefix_itr.split(metric_prefix)
+            collected_data.append([float(wall_time), float(val), float(itr)])
         elif line.startswith('\t \t '):
             continue
         else:
@@ -225,8 +226,8 @@ def parse_log(instance_dict, log_file_path, si, suffix, obj_multiplier = 1.0, ov
         if max_dual_is_optimal:
             current_log[:, 1] = np.minimum(current_log[:, 1], max_dual_obj)
         resampled, max_time = resample_log(current_log, si, max_time)
+        resampled_itr, max_time = resample_log(current_log[:, [0, 2]], si, max_time)
         resampled_rel_gaps = compute_relative_gaps(resampled[1:2, :], min_dual_obj, max_dual_obj)
-        
         rel_gap_difference = resampled_rel_gaps[0, :-1] - resampled_rel_gaps[0, 1:]
         best_index = resampled.shape[1] - 1
         if min(rel_gap_difference) < diff_tol:
@@ -309,6 +310,8 @@ def parse_dataset(instance_dict, root_dir_or_log, suffix, si = 5, overwrite_min_
 # parse_dataset(worms_instances, '/BS/ahmed_projects/work/projects/LearnDBCA/out_dual/slurm_new/9415914.out', suffix_learned, si = 2.5, overwrite_min_lb = False) # wo lstm but rand start.
 #parse_dataset(worms_instances, '/BS/ahmed_projects/work/projects/LearnDBCA/out_dual/slurm_new/9415908.out', suffix_learned, si = 2.5, overwrite_min_lb = False) # lstm rand start.
 
+parse_dataset(worms_instances, '/BS/ahmed_projects/work/projects/LearnDBCA/out_dual/slurm_new/10082780.out', suffix_learned, si = 2.5, overwrite_min_lb = False)
+
  
 # parse_dataset(qaplib_small_instances, 
 #             '/home/ahabbas/projects/LearnDBCA/out_dual/slurm_new/9296407.out',
@@ -351,33 +354,33 @@ def parse_dataset(instance_dict, root_dir_or_log, suffix, si = 5, overwrite_min_
 #             overwrite_min_lb = False,
 #             diff_tol = 1e-4)
 
-parse_dataset(ind_set_instances, 
-            '/home/ahabbas/projects/LearnDBCA/out_dual/MIS/nobackup/vf/v6_mixed_prec_1_1_16_16_8_1_20_20_20_True_True_1e-3_False_1_True_True_0.0/double_prec_50_200_1e-9/9287189.out', 
-            suffix_non_learned,
-            si = 0.1, 
-            overwrite_min_lb = True, 
-            obj_multiplier = -1.0,
-            diff_tol = 1e-15)
+# parse_dataset(ind_set_instances, 
+#             '/home/ahabbas/projects/LearnDBCA/out_dual/MIS/nobackup/vf/v6_mixed_prec_1_1_16_16_8_1_20_20_20_True_True_1e-3_False_1_True_True_0.0/double_prec_50_200_1e-9/9287189.out', 
+#             suffix_non_learned,
+#             si = 0.1, 
+#             overwrite_min_lb = True, 
+#             obj_multiplier = -1.0,
+#             diff_tol = 1e-15)
 
-parse_dataset(ind_set_instances, 
-            '/home/ahabbas/projects/LearnDBCA/out_dual/MIS/nobackup/vf/v6_mixed_prec_1_1_16_16_8_1_20_20_20_True_True_1e-3_False_1_True_True_0.0/double_prec_50_200_1e-9/9287189.out', 
-            suffix_learned,
-            si = 0.1, 
-            overwrite_min_lb = False,
-            obj_multiplier = -1.0)
+# parse_dataset(ind_set_instances, 
+#             '/home/ahabbas/projects/LearnDBCA/out_dual/MIS/nobackup/vf/v6_mixed_prec_1_1_16_16_8_1_20_20_20_True_True_1e-3_False_1_True_True_0.0/double_prec_50_200_1e-9/9287189.out', 
+#             suffix_learned,
+#             si = 0.1, 
+#             overwrite_min_lb = False,
+#             obj_multiplier = -1.0)
 
-parse_dataset(ind_set_instances, 
-            '/home/ahabbas/projects/LearnDBCA/out_dual/slurm_new/9349914.out', # '/home/ahabbas/projects/LearnDBCA/out_dual/slurm_new/9349914.out', 
-            suffix_learned,
-            si = 0.1, 
-            overwrite_min_lb = False,
-            obj_multiplier = -1.0, 
-            diff_tol = 0.0)
+# parse_dataset(ind_set_instances, 
+#             '/home/ahabbas/projects/LearnDBCA/out_dual/slurm_new/9349914.out', # '/home/ahabbas/projects/LearnDBCA/out_dual/slurm_new/9349914.out', 
+#             suffix_learned,
+#             si = 0.1, 
+#             overwrite_min_lb = False,
+#             obj_multiplier = -1.0, 
+#             diff_tol = 0.0)
 
-parse_dataset(ind_set_instances, 
-            '/home/ahabbas/projects/LearnDBCA/out_dual/slurm_new/9431069.out', 
-            suffix_learned,
-            si = 0.1, 
-            overwrite_min_lb = False,
-            obj_multiplier = -1.0, 
-            diff_tol = 0.0)
+# parse_dataset(ind_set_instances, 
+#             '/home/ahabbas/projects/LearnDBCA/out_dual/slurm_new/9431069.out', 
+#             suffix_learned,
+#             si = 0.1, 
+#             overwrite_min_lb = False,
+#             obj_multiplier = -1.0, 
+#             diff_tol = 0.0)
