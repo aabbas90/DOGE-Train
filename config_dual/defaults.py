@@ -58,7 +58,7 @@ cfg.MODEL.MP_AGGR = 'mean'
 
 cfg.DATA = CN()
 # Number of workers for data loader
-cfg.DATA.DISK_DATA_ROOT = '/home/ahabbas/data/learnDBCA/cv_structure_pred/'
+cfg.DATA.DISK_DATA_ROOT = 'data/learnDBCA/cv_structure_pred/'
 cfg.DATA.NUM_WORKERS = 0
 
 cfg.DATA.DATASETS = []
@@ -95,7 +95,7 @@ cfg.LOG_EVERY = 20
 
 cfg.TEST.DATA = CN() # Stores dataset params used for testing only.
 cfg.SEED = 1
-cfg.OUTPUT_ROOT_DIR = '/home/ahabbas/projects/LearnDBCA/out_dual/' # Do not change, if changed exclude it from sbatch files from copying.
+cfg.OUTPUT_ROOT_DIR = 'out_dual/' # Do not change, if changed exclude it from sbatch files from copying.
 cfg.OUT_REL_DIR = 'CT/v1/'
 
 def get_cfg_defaults():
