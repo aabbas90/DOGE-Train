@@ -8,5 +8,7 @@ conda install -c conda-forge tqdm
 
 conda install -c conda-forge torchmetrics
 
+# Install CUDA solver with bindings:
 cd external/BDD/BDD-main
 python setup.py install
+cd ../../..
