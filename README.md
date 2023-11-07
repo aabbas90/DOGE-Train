@@ -1,5 +1,6 @@
 # DOGE-Train: Discrete optimization on GPU with end-to-end training
 A fast, scalable, data-driven approach for solving relaxations of 0-1 integer linear programs on GPU.
+![DOGE pipeline](./data/doge_pipeline.PNG)
 
 ## Requirements
 We use `Pytorch 2.0` and `CUDA 11.8`. `Gurobi` is used as one of the baselines and also for parsing ILPs. Consult `install.sh` for installing all requirements.
