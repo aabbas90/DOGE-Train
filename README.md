@@ -20,12 +20,11 @@ For other datasets modify the variable `DATA_DIR` in config files appropriately.
 ./datasets/<DATA_NAME>/test_split/instances/<testing .lp files here>
 ```
 
-
-See `configs/config_mis.py` for an example.
+See `configs/config_mis.py` for an example. Config files for other datasets used in the paper are provided in the `configs/` folder.
 
 ## Training:
 For synthetic independent set problems generated above run `train_mis.sh` script. For details about configs, command-line parameters see `configs/config_mis.py`,`configs/default` and `train_doge.py`.
-Note that for testing we run Gurobi to compute ground-truth. This can be disabled by setting `need_gt = False` in `configs/config_mis.py`. 
+Note that for testing we automatically run Gurobi for comparison. This can be disabled by setting `need_gt = False` in `configs/config_mis.py`. 
 
 ## Code organization:
 
