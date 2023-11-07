@@ -23,12 +23,11 @@ For other datasets used in the paper we provide config files containing all hype
 
 See `configs/config_mis.py` for an example. 
 
-## Training:
+## Training
 For synthetic independent set problems generated above run `train_mis.sh` script. For details about configs, command-line parameters see `configs/config_mis.py`, `configs/default` and `train_doge.py`.
 Note that for testing we automatically run Gurobi for comparison. This can be disabled by setting `need_gt = False` in `configs/config_mis.py`. 
 
-## Code organization:
-
+## Code organization
 - `train_doge.py`: Entry point. 
 - `doge.py`: Code for training and testing. Uses `pytorch lightning` for ease of use. 
 - `configs/`: Contains configuration files for all datasets. 
