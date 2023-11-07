@@ -5,25 +5,26 @@ A fast, scalable, data-driven approach for solving relaxations of 0-1 integer li
 ## Requirements
 We use `Pytorch 2.0` and `CUDA 11.8`. `Gurobi` is used as one of the baselines and also for parsing ILPs. Consult `install.sh` for installing all requirements.
 
-## Datasets:
-### 1. Synthetic problems:
+## Datasets
+### 1. Synthetic problems
 First generate synthetic problems through the following command:
 ```bash
 python data/generate_independent_set_inst.py
 ```
 This will generate independent set problem instances as used in the paper and write them in `datasets/MIS` directory. 
 
-### 2. Custom datasets:
-For other datasets modify the variable `DATA_DIR` in config files appropriately. The format should be 
+### 2. Custom datasets
+For other datasets used in the paper we provide config files containing all hyperparameters in the `configs` folder. Modify the variable `DATA_DIR` in the config file appropriately. The format should be 
+
 ```
 ./datasets/<DATA_NAME>/train_split/instances/<training .lp files here>
 ./datasets/<DATA_NAME>/test_split/instances/<testing .lp files here>
 ```
 
-See `configs/config_mis.py` for an example. Config files for other datasets used in the paper are provided in the `configs/` folder.
+See `configs/config_mis.py` for an example. 
 
 ## Training:
-For synthetic independent set problems generated above run `train_mis.sh` script. For details about configs, command-line parameters see `configs/config_mis.py`,`configs/default` and `train_doge.py`.
+For synthetic independent set problems generated above run `train_mis.sh` script. For details about configs, command-line parameters see `configs/config_mis.py`, `configs/default` and `train_doge.py`.
 Note that for testing we automatically run Gurobi for comparison. This can be disabled by setting `need_gt = False` in `configs/config_mis.py`. 
 
 ## Code organization:
