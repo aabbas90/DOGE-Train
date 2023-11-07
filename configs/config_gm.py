@@ -39,7 +39,7 @@ cfg.DATA.GM_WORMS_VAL_PARAMS = CN({'files_to_load': ['worm01-16-03-11-1745.lp'],
 
 cfg.TEST.DATA.DATASETS = ['WORM_TEST']
 WORM_TEST = [f'worm{i}-16-03-11-1745.lp' for i in range(10, 31)]
-cfg.TEST.DATA.WORM_TEST_PARAMS = CN({'files_to_load': WORM_TEST, 'root_dir': DATA_DIR, 'read_dual_converged' : False}) 
+cfg.TEST.DATA.WORM_TEST_PARAMS = CN({'files_to_load': WORM_TEST, 'root_dir': DATA_DIR, 'read_dual_converged' : False, 'need_gt' : True}) 
 
 cfg.OUTPUT_ROOT_DIR = 'output_logs/'
 cfg.OUT_REL_DIR = 'WORMS/v1/'

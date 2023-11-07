@@ -38,12 +38,12 @@ cfg.DATA.VAL_FRACTION = [0.0, 1.0]
 
 CT_TRAIN_FILES = ['flywing_100_1.lp', 'flywing_100_2.lp']
 
-cfg.DATA.CT_TRAIN_PARAMS = CN({'files_to_load': CT_TRAIN_FILES, 'root_dir': DATA_DIR, 'read_dual_converged' : False, 'need_gt': True, 'load_in_memory': True})
-cfg.DATA.CT_VAL_PARAMS = CN({'files_to_load': CT_TRAIN_FILES, 'root_dir': DATA_DIR, 'read_dual_converged' : False, 'need_gt': True, 'load_in_memory': True})
+cfg.DATA.CT_TRAIN_PARAMS = CN({'files_to_load': CT_TRAIN_FILES, 'root_dir': DATA_DIR, 'read_dual_converged' : False, 'need_gt': False, 'load_in_memory': True})
+cfg.DATA.CT_VAL_PARAMS = CN({'files_to_load': CT_TRAIN_FILES, 'root_dir': DATA_DIR, 'read_dual_converged' : False, 'need_gt': False, 'load_in_memory': True})
 
 cfg.TEST.DATA.DATASETS = ['CT_TEST']
 CT_TEST_FILES =['flywing_245.lp']
-cfg.TEST.DATA.CT_TEST_PARAMS = CN({'files_to_load': CT_TEST_FILES, 'root_dir': DATA_DIR, 'read_dual_converged' : False, 'need_gt': False})
+cfg.TEST.DATA.CT_TEST_PARAMS = CN({'files_to_load': CT_TEST_FILES, 'root_dir': DATA_DIR, 'read_dual_converged' : False, 'need_gt': True})
 
 cfg.OUTPUT_ROOT_DIR = 'output_logs/'
 cfg.OUT_REL_DIR = 'CT_LARGE/v1/'

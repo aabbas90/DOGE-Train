@@ -30,8 +30,8 @@ class ILPDiskDataset(torch_geometric.data.InMemoryDataset):
         data_root_dir = params.root_dir
         files_to_load = params.files_to_load
         read_dual_converged = params.read_dual_converged
-        need_gt = True
-        need_ilp_gt = True
+        need_gt = False
+        need_ilp_gt = False
         load_in_memory = False
         extension = '.lp'
         need_bdd_constraint_features = 'con_type' in con_features
