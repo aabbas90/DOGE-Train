@@ -20,7 +20,6 @@ def generate_ilps(root_dir, suffix, improvement_slope, num_iterations, omega):
         out_filename = filename.replace(ext, suffix + ext)
         bdd_repr = pickle.load(open(os.path.join(bdd_rep_path, filename), 'rb'))
         solve_dual_bdd(bdd_repr, improvement_slope, num_iterations, omega)
-        breakpoint()
         pickle.dump(open(os.path.join(bdd_rep_path, out_filename), 'wb'))
 
 parser = argparse.ArgumentParser()

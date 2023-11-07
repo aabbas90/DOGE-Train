@@ -12,6 +12,7 @@ def create_normalized_bdd_instance(ilp_path):
     obj_offset = ilp_gurobi.ObjCon
     obj_multiplier = 1.0
     if ilp_gurobi.ModelSense == -1: # Maximization
+        print(f'In file: {ilp_path}, detected maximization instead of minimization. Creating BDD representation with minimzation objective.')
         obj_multiplier = -1.0
     variables = ilp_gurobi.getVars()
     cons = ilp_gurobi.getConstrs()
@@ -19,7 +20,7 @@ def create_normalized_bdd_instance(ilp_path):
     objs = []
     var_names = []
     for var in variables:
-        # GM can contain continuous variables even though they will ultimately have binary value. TODOAA.
+        # GM can contain continuous variables even though they will ultimately take a binary value.
         # if (var.VType != 'B'): #, f'Variable {var} is not binary in file {ilp_path} and instead of type {var.VType}'
         #     print(f'Non-binary variable.')
         #     return None, None, None
@@ -230,10 +231,5 @@ class BipartiteVarConDataset(torch_geometric.data.Data):
             return torch.tensor([[self.num_vars], [self.num_cons]])
         # if key == 'var_indices':
         #     return torch.tensor([self.num_vars])
-        # if key == 'var_indices':
-        #     return torch.tensor([self.num_vars])
         else:
             return super().__inc__(key, value, *args, **kwargs)
-
-#create_normalized_bdd_instance('/home/ahabbas/data/learnDBCA/cv_structure_pred/cell-tracking-AISTATS-2020/large/flywing_100_1/instances/5.lp')
-#create_normalized_bdd_instance('/BS/discrete_opt/work/datasets/graph_matching/hotel_house/hotel/energy_hotel_frame29frame36.lp')

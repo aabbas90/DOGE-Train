@@ -22,6 +22,6 @@ conda activate LearnDBCA_new #_old_glib
 
 ROOT_DIR="out_dual/MIS/nobackup/vf/v7_lstm_1_1_16_16_8_3_20_20_20_True_True_1e-3_False_2_True_True_0.0_False_False_True/"
 
-python train_dual_ascent.py --config-file ${ROOT_DIR}/config.yaml --test-precision-float \
+python train_doge.py --config-file ${ROOT_DIR}/config.yaml --test-precision-float \
     MODEL.CKPT_PATH ${ROOT_DIR}/default/version_0/checkpoints/last.ckpt
 exit 0

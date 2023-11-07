@@ -79,14 +79,14 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     #     dist_weights_grad, omega_vec_grad = populate_grad_features_dual(solvers, solver_state, dist_weights, omega_vec, num_grad_iterations_dual_features, batch.batch_index_con)
 
     # Variable LP features:
-    var_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[0])
+    var_degree = scatter_add(torch.ones((batch.num_edges.sum()), device=device), batch.edge_index_var_con[0])
     var_degree[torch.cumsum(batch.num_vars, 0) - 1] = 0 # Terminal nodes, not corresponding to any primal variable.
     batch.var_lp_f = torch.zeros((torch.numel(batch.objective), len(var_lp_f_names)), device = device, dtype = torch.get_default_dtype())
     batch.var_lp_f = set_features('obj', var_lp_f_names, batch.var_lp_f, batch.objective.to(device))
     batch.var_lp_f = set_features('deg', var_lp_f_names, batch.var_lp_f, var_degree)
 
     # Constraint LP features:
-    con_degree = scatter_add(torch.ones((batch.num_edges), device=device), batch.edge_index_var_con[1])
+    con_degree = scatter_add(torch.ones((batch.num_edges.sum()), device=device), batch.edge_index_var_con[1])
     batch.con_lp_f = torch.zeros((torch.numel(con_degree), len(con_lp_f_names)), device = device, dtype = torch.get_default_dtype())
     batch.con_lp_f = set_features('deg', con_lp_f_names, batch.con_lp_f, con_degree)
     batch.con_lp_f = set_features('rhs', con_lp_f_names, batch.con_lp_f, batch.rhs_vector.to(device))
