@@ -14,11 +14,11 @@ python data/generate_independent_set_inst.py
 This will generate independent set problem instances as used in the paper and write them in `datasets/MIS` directory. 
 
 ### 2. Custom datasets
-For other datasets used in the paper we provide config files containing all hyperparameters in the `configs` folder. Modify the variable `DATA_DIR` in the config file appropriately. The format should be 
+For other datasets used in the paper we provide config files containing all hyperparameters in the `configs` folder. Modify the variable `DATA_DIR` in the config file appropriately. The files should be organized as follows 
 
 ```
-./datasets/<DATA_NAME>/train_split/instances/<training .lp files here>
-./datasets/<DATA_NAME>/test_split/instances/<testing .lp files here>
+<DATA_DIR>/train_split/instances/<training .lp files here>
+<DATA_DIR>/test_split/instances/<testing .lp files here>
 ```
 
 See `configs/config_mis.py` for an example. 
