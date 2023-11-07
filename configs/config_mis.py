@@ -3,6 +3,8 @@ from configs.defaults import get_cfg_defaults, get_all_lp_instances
 
 cfg = get_cfg_defaults()
 
+DATA_DIR = 'datasets/MIS'
+
 cfg.TRAIN.NUM_ROUNDS_WITH_GRAD = 1
 cfg.TRAIN.NUM_DUAL_ITERATIONS = 20
 cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 20
@@ -34,11 +36,11 @@ cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', '
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['MIS_TRAIN', 'MIS_VAL']
 cfg.DATA.VAL_FRACTION = [0.0, 1.0]
-cfg.DATA.MIS_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': 'datasets/MIS/train_split/', 'read_dual_converged': False}) 
-cfg.DATA.MIS_VAL_PARAMS = CN({'files_to_load': ['0.lp', '1.lp'], 'root_dir': 'datasets/MIS/train_split/', 'read_dual_converged' : False}) 
+cfg.DATA.MIS_TRAIN_PARAMS = CN({'files_to_load': [], 'root_dir': f'{DATA_DIR}/train_split/', 'read_dual_converged': False}) 
+cfg.DATA.MIS_VAL_PARAMS = CN({'files_to_load': ['0.lp', '1.lp'], 'root_dir': f'{DATA_DIR}/train_split/', 'read_dual_converged' : False}) 
 
 test_datasets, test_params = get_all_lp_instances(
-    root_dir = 'datasets/MIS/test_split/', data_name = 'MIS', keyword = None, read_converged = False, need_gt = True)
+    root_dir = f'{DATA_DIR}/test_split/', data_name = 'MIS', keyword = None, read_converged = False, need_gt = True)
 cfg.TEST.DATA.DATASETS = test_datasets
 cfg.TEST.DATA.update(test_params)
 
