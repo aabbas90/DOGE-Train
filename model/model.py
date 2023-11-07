@@ -8,7 +8,6 @@ class EdgeUpdater(torch.nn.Module):
     # Receives learned var, con, edge features and fixed edge features to predict new learned edge features.
     def __init__(self, num_input_edge_channels, num_hidden_channels, num_output_edge_channels, num_var_channels, num_con_channels, num_hidden_layers = 0, use_celu_activation = False):
         super(EdgeUpdater, self).__init__()
-        # num_input_channels = num_var_channels + num_con_channels + num_input_edge_channels
         self.activation = nn.ReLU()
         if use_celu_activation:
             self.activation = nn.Softplus()
