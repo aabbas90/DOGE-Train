@@ -221,6 +221,11 @@ class DOGE(LightningModule):
     # 2. Afterwards we start exposing the solver to difficult regions where proposed_start_step will be much larger than 0.
     # 3. Then we restart and start sampling again at easy regions and increase difficulty again.
     # 4. Step 3 is repeated 'num_journeys' times. 
+    # Note that if 'use_replay_buffer' is set to True and assume we want to learn GNN at N-th iteration of the solver then
+    # we will search in the replay buffer for an iterate (see line 199) instead of running the solver for N iterations. This cuts down a large
+    # portion of training cost. However for LSTM based model the replay buffer does not help much since LSTM needs to build its 
+    # cell state. Naively storing this cell state in replay buffer makes it out-of-date and gives worse results than not using 
+    # replay buffer. 
     def compute_training_start_round(self):
         current_start_epoch = self.current_epoch - self.hparams.start_episodic_training_after_epoch
         max_training_epoch_mod = 1 + (self.trainer.max_epochs // self.hparams.num_journeys) # Divides num_journeys many journeys.
