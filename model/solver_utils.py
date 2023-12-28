@@ -12,7 +12,9 @@ def set_features(f_name, feature_names_to_use, feature_tensor, feature_vector):
 
 def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, con_lp_f_names, edge_lp_f_names, 
                             num_iterations = 20, improvement_slope = 0.0, omega = 0.5, distribute_deltaa = False, 
-                            num_grad_iterations_dual_features = 0, compute_history_for_itrs = 20, avg_sol_beta = 0.9):
+                            num_grad_iterations_dual_features = 0, compute_history_for_itrs = 20, avg_sol_beta = 0.9,
+                            replay_buffer = None, replay_buffer_start_round = None, smoothing_coeffs = [],
+                            use_lstm_var = False, num_learned_var_f = 0):
     batch.edge_index_var_con = batch.edge_index_var_con.to(device) 
     batch.batch_index_var = batch.objective_batch.to(device) # var batch assignment
     batch.batch_index_con = batch.rhs_vector_batch.to(device) # con batch assignment
@@ -28,24 +30,56 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     for b in range(len(batch.solver_data)):
         solver = pickle.loads(batch.solver_data[b])
         batch.solver_data[b] = None # Free-up the memory.
+        solver.distribute_delta()
         solver.get_solver_costs(lo_costs_out[layer_start].data_ptr(), hi_costs_out[layer_start].data_ptr(), def_mm_out[layer_start].data_ptr())
         layer_start += solver.nr_layers()
         solvers.append(solver)
+    initial_lbs = [solver.lower_bound() for solver in solvers]
+    batch.sampled_trajectory_locations = [0] * len(solvers)
+    if use_lstm_var:
+        batch.var_hidden_states_lstm = {'h': torch.zeros((torch.numel(batch.objective), num_learned_var_f), device = device),
+                                        'c': torch.zeros((torch.numel(batch.objective), num_learned_var_f), device = device)}
+    else:
+        batch.var_hidden_states_lstm = torch.empty((0, 0))
+
+    var_start, layer_start = 0, 0
+    for (b, solver) in enumerate(solvers):
+        # if replay_buffer_start_round = 0 we are at initial point anyway.
+        sampled = False
+        num_var_nodes = solver.nr_primal_variables() + 1 # +1 to account for BDD terminal nodes.
+        if replay_buffer is not None and batch.file_path[b] in replay_buffer and replay_buffer_start_round > 0:
+            sampled_trajectory = replay_buffer[batch.file_path[b]].sample(replay_buffer_start_round)
+            if sampled_trajectory:
+                if not use_lstm_var:
+                    (lo_costs_t, hi_costs_t, def_mm_t), sampled_index = sampled_trajectory
+                else:
+                    (lo_costs_t, hi_costs_t, def_mm_t, lstm_h_t, lstm_c_t), sampled_index = sampled_trajectory
+                    batch.var_hidden_states_lstm['h'][var_start: var_start + num_var_nodes] = lstm_h_t.to(device)
+                    batch.var_hidden_states_lstm['c'][var_start: var_start + num_var_nodes] = lstm_c_t.to(device)
+                batch.sampled_trajectory_locations[b] = sampled_index
+                lo_costs_t = lo_costs_t.to(device).contiguous()
+                hi_costs_t = hi_costs_t.to(device).contiguous()
+                def_mm_t = def_mm_t.to(device).contiguous()
+                solver.set_solver_costs(lo_costs_t.data_ptr(), hi_costs_t.data_ptr(), def_mm_t.data_ptr())
+                solver.get_solver_costs(lo_costs_out[layer_start].data_ptr(), hi_costs_out[layer_start].data_ptr(), def_mm_out[layer_start].data_ptr())
+                sampled = True
+        layer_start += solver.nr_layers()
+        var_start += num_var_nodes
 
     solver_state = {'lo_costs': lo_costs_out, 'hi_costs': hi_costs_out, 'def_mm': def_mm_out}
+    if distribute_deltaa:
+        solver_state = distribute_delta(solvers, solver_state)
+    # dual_feasbility_check(solvers, solver_state, batch.objective.to(device), batch.num_vars, distribute_delta_before = not distribute_deltaa)
     prev_per_bdd_lb = compute_per_bdd_lower_bound(solvers, solver_state)
     prev_per_bdd_sol = compute_per_bdd_solution(solvers, solver_state)
     dist_weights = normalize_distribution_weights(torch.ones_like(lo_costs_out), batch.edge_index_var_con)
 
-    dual_feasbility_check(solvers, solver_state, batch.objective.to(device), batch.num_vars)
     # Run non-learned solver for num_iterations to build history.
     solver_state, sol_avg, lb_first_order_avg, lb_sec_order_avg = dual_iterations(solvers, solver_state, dist_weights, num_iterations, batch.omega, improvement_slope, 
                                             grad_dual_itr_max_itr = None, compute_history_for_itrs = compute_history_for_itrs, avg_sol_beta = avg_sol_beta)
 
     if distribute_deltaa:
         solver_state = distribute_delta(solvers, solver_state)
-    
-    initial_lbs = [solver.lower_bound() for solver in solvers]
 
     per_bdd_lb = compute_per_bdd_lower_bound(solvers, solver_state)
     per_bdd_sol = compute_per_bdd_solution(solvers, solver_state)
@@ -116,10 +150,23 @@ def init_solver_and_get_states(batch, device, gt_solution_type, var_lp_f_names, 
     batch.edge_rest_lp_f = set_features('mm_diff', edge_lp_f_names, batch.edge_rest_lp_f, mm_diff)
     batch.edge_rest_lp_f = set_features('coeff', edge_lp_f_names, batch.edge_rest_lp_f, batch.con_coeff.to(device))
     batch.edge_rest_lp_f = set_features('omega', edge_lp_f_names, batch.edge_rest_lp_f, torch.zeros_like(per_bdd_sol) + omega)
+    batch.edge_rest_lp_f = populate_smooth_solution_features(batch.solvers, edge_lp_f_names, batch.solver_state, batch.edge_rest_lp_f, batch.valid_edge_mask)
     # if num_grad_iterations_dual_features > 0:
     #     batch.edge_rest_lp_f = set_features('grad_dist_weights', edge_lp_f_names, batch.edge_rest_lp_f, dist_weights_grad)
     #     batch.edge_rest_lp_f = set_features('grad_omega', edge_lp_f_names, batch.edge_rest_lp_f, omega_vec_grad)
     return batch, dist_weights
+
+def populate_smooth_solution_features(solvers, edge_lp_f_names, solver_state, edge_rest_lp_f, valid_edge_mask):
+    for fname in edge_lp_f_names:
+        if 'smooth_sol' in fname:
+            _, sm_coeff = fname.split("@")
+            prob_hi = compute_smoothed_solution(solvers, solver_state, valid_edge_mask, float(sm_coeff) * 100.0)
+            edge_rest_lp_f = set_features(fname, edge_lp_f_names, edge_rest_lp_f, prob_hi)
+            # torch.set_printoptions(edgeitems = 20)
+            # print(fname)
+            # print(prob_hi)
+            # print('')
+    return edge_rest_lp_f
 
 def compute_normalized_solver_costs_for_primal(solver_state, mm_diff, lb, edge_index_var_con, batch_index_var, batch_index_con, batch_index_edge, norm_type = 'inf'):
     net_edge_cost = solver_state['hi_costs'] - solver_state['lo_costs']
@@ -213,6 +260,10 @@ def distribute_delta(solvers, solver_state):
 
 def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, improvement_slope = 1e-6, 
                     grad_dual_itr_max_itr = None, compute_history_for_itrs = 20, avg_sol_beta = 0.9, randomize_num_itrs = False):
+    # Following two lines use solver written fully in pytorch and so uses pytorch autodiff to compute gradients. 
+    # Not using it by default as it is memory intensive for large instances especially with num_iterations >> 1.
+    # if solver_state['hi_costs'].requires_grad or omega.requires_grad or dist_weights.requires_grad:
+    #     return dual_iterations_torch(solvers, solver_state, dist_weights, num_iterations, omega, [0], 'cuda')
     assert num_iterations >= compute_history_for_itrs
     if grad_dual_itr_max_itr is None:
         grad_dual_itr_max_itr = num_iterations
@@ -226,6 +277,39 @@ def dual_iterations(solvers, solver_state, dist_weights, num_iterations, omega, 
     solver_state['def_mm'] = def_mm
     # Return updated solver_state, average of last 'compute_history_for_itrs'-many per BDD solutions, 
     # smoothed first order difference of lb and smoothed second order difference of lb.
+    return solver_state, sol_avg, lb_first_order_avg, lb_sec_order_avg
+
+def dual_iterations_torch(cuda_solvers, solver_state, dist_weights, num_iterations, omega, lb_shape, device, smoothing = None):
+    sol_avg = torch.zeros_like(solver_state['lo_costs'])
+    lb_first_order_avg = torch.zeros((lb_shape), device = 'cuda')
+    lb_sec_order_avg = torch.zeros((lb_shape), device = 'cuda')
+
+    layer_start = 0
+    lo_costs_in = solver_state['lo_costs'].to(device)
+    hi_costs_in = solver_state['hi_costs'].to(device)
+    def_mm_in = solver_state['def_mm'].to(device)
+    dist_weights_in = dist_weights.to(device)
+    if omega.numel() == 1:
+        omega_in = torch.zeros_like(hi_costs_in) + omega.item()
+    else:
+        omega_in = omega.to(device)
+    lo_costs_out = torch.empty_like(lo_costs_in)
+    hi_costs_out = torch.empty_like(hi_costs_in)
+    def_mm_out = torch.empty_like(def_mm_in)
+    for (b, solver) in enumerate(cuda_solvers): 
+        layer_end = layer_start + solver.nr_layers()
+        torch_solver = bdd_cuda_torch.bdd_torch_learned_mma(solver, device)
+        cur_lo, cur_hi, cur_def_mm = torch_solver.iterations(
+            lo_costs_in[layer_start:layer_end], hi_costs_in[layer_start:layer_end], def_mm_in[layer_start:layer_end],
+            dist_weights_in[layer_start:layer_end], omega_in[layer_start:layer_end], num_iterations, 
+            smoothing = smoothing)
+        lo_costs_out[layer_start:layer_end] = cur_lo
+        hi_costs_out[layer_start:layer_end] = cur_hi
+        def_mm_out[layer_start:layer_end] = cur_def_mm
+        layer_start += solver.nr_layers()
+    solver_state['lo_costs'] = lo_costs_out.to('cuda')
+    solver_state['hi_costs'] = hi_costs_out.to('cuda')
+    solver_state['def_mm'] = def_mm_out.to('cuda')
     return solver_state, sol_avg, lb_first_order_avg, lb_sec_order_avg
 
 def compute_all_min_marginal_diff(solvers, solver_state):
@@ -242,12 +326,6 @@ def normalize_distribution_weights_softmax(dist_weights, edge_index_var_con):
     var_indices = edge_index_var_con[0, :]
     softmax_scores = scatter_softmax(dist_weights.to(torch.get_default_dtype()), var_indices)
     return softmax_scores.to(torch.get_default_dtype())
-
-# def perturb_primal_costs(solvers, lo_costs, hi_costs, primal_perturbation):
-#     primal_pert_lo = torch.relu(-primal_perturbation)
-#     primal_pert_hi = torch.relu(primal_perturbation)
-#     lo_costs, hi_costs = bdd_cuda_torch.PerturbPrimalCosts.apply(solvers, primal_pert_lo, primal_pert_hi, lo_costs, hi_costs)
-#     return lo_costs, hi_costs
 
 def perturb_primal_costs(lo_costs, hi_costs, lo_pert, hi_pert, dist_weights, edge_index_var_con):
     var_indices = edge_index_var_con[0]
@@ -329,6 +407,14 @@ def primal_rounding_non_learned(num_rounds, solvers, norm_solver_state, obj_mult
 #         #     f'equal min-marg diff.: {var_undecided.sum():.0f}, '
 #         #     f'inconsistent min-marg diff.: {var_inconsistent.sum():.0f}')
 #     return mm_diff, None, logs
+
+def compute_smoothed_solution(solvers, solver_state, valid_edge_mask, smoothing_coeff):
+    lo_costs = solver_state['lo_costs'].detach().clone()
+    hi_costs = solver_state['hi_costs'].detach().clone()
+    solver_state = distribute_delta(solvers, solver_state)
+    smooth_sol = bdd_cuda_torch.GetMarginalProbability(solvers, lo_costs * smoothing_coeff, hi_costs * smoothing_coeff)
+    smooth_sol[~valid_edge_mask] = 0
+    return smooth_sol
 
 def dual_feasbility_check(solvers, solver_state, orig_primal_obj, num_vars_per_instance, distribute_delta_before = False, tolerance = 1e-3):
     var_start = 0

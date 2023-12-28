@@ -88,10 +88,11 @@ def main(args):
 
     assert ckpt_path is None or os.path.isfile(ckpt_path), f'CKPT: {ckpt_path} not found.'
     checkpoint_callback = ModelCheckpoint(save_last = True, save_on_train_epoch_end = True, mode = 'max', save_top_k = 1, monitor = 'train_last_round_lb', verbose = True)
-    # early_stopping = EarlyStopping('train_last_round_lb', 
-    #                             patience = 2 * cfg.TRAIN.MAX_NUM_EPOCHS // cfg.TRAIN.NUM_JOURNEYS, 
-    #                             check_on_train_epoch_end = True, 
-    #                             mode = 'max')
+    patience_mult = 4 if cfg.TRAIN.USE_REPLAY_BUFFER else 2 # train for more iterations if using replay buffer since samples from trajectories are 'off-policy'.
+    early_stopping = EarlyStopping('train_last_round_lb', 
+                                patience = patience_mult * cfg.TRAIN.MAX_NUM_EPOCHS // cfg.TRAIN.NUM_JOURNEYS, 
+                                check_on_train_epoch_end = True, 
+                                mode = 'max')
     num_sanity_val_steps = 0
     # if args.test_non_learned:
     #     num_sanity_val_steps = -1
@@ -104,7 +105,7 @@ def main(args):
                     num_sanity_val_steps = num_sanity_val_steps, 
                     log_every_n_steps=cfg.LOG_EVERY,
                     gradient_clip_val=cfg.TRAIN.GRAD_CLIP_VAL,
-                    callbacks=[checkpoint_callback], #, early_stopping],
+                    callbacks=[checkpoint_callback, early_stopping],
                     detect_anomaly = False)
 
     combined_train_loader, val_loaders, val_datanames, test_loaders, test_datanames = get_ilp_gnn_loaders(cfg, 
@@ -147,14 +148,15 @@ def main(args):
             model = model.to(torch.float32)
 
         trainer.fit(model, combined_train_loader, val_loaders)
-        # save_best_ckpt_cfg(cfg, output_dir, checkpoint_callback.best_model_path)
-        # model = DOGE.load_from_checkpoint(checkpoint_callback.best_model_path,
-        #     num_test_rounds = cfg.TEST.NUM_ROUNDS,
-        #     num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
-        #     dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
-        #     val_datanames = val_datanames,
-        #     test_datanames = test_datanames,
-        #     non_learned_updates_test = args.test_non_learned)
+        save_best_ckpt_cfg(cfg, output_dir, checkpoint_callback.best_model_path)
+        # Use the checkpoint with the best training performance for testing.
+        model = DOGE.load_from_checkpoint(checkpoint_callback.best_model_path,
+            num_test_rounds = cfg.TEST.NUM_ROUNDS,
+            num_dual_iter_test = cfg.TEST.NUM_DUAL_ITERATIONS,
+            dual_improvement_slope_test = cfg.TEST.DUAL_IMPROVEMENT_SLOPE,
+            val_datanames = val_datanames,
+            test_datanames = test_datanames,
+            non_learned_updates_test = args.test_non_learned)
         combined_train_loader = None
         val_loaders = None
         if args.test_precision_float:

@@ -10,15 +10,18 @@ cfg.TRAIN.NUM_DUAL_ITERATIONS = 1
 cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 1
 cfg.TRAIN.NUM_ROUNDS = 400
 cfg.TRAIN.FREE_UPDATE_LOSS_WEIGHT = 0.0
-cfg.TRAIN.MAX_NUM_EPOCHS = 500
-cfg.TRAIN.NUM_JOURNEYS = 5
+cfg.TRAIN.MAX_NUM_EPOCHS = 1025
+cfg.TRAIN.NUM_JOURNEYS = 10
 cfg.TRAIN.BATCH_SIZE = 1
-cfg.TRAIN.NUM_ROUNDS = 30
+cfg.TRAIN.GRAD_CLIP_VAL = 50.0
+cfg.TRAIN.USE_REPLAY_BUFFER = True
+cfg.TRAIN.START_EPISODIC_TRAINING_AFTER_EPOCH = 25
 
 cfg.MODEL.PREDICT_OMEGA = False
 cfg.MODEL.PREDICT_DIST_WEIGHTS = False
 cfg.MODEL.USE_LSTM_VAR = False
 cfg.MODEL.FREE_UPDATE = True
+cfg.MODEL.USE_SEPARATE_MODEL_LATER_STAGE = True
 
 cfg.TEST.DUAL_IMPROVEMENT_SLOPE = 0.0
 cfg.TEST.NUM_ROUNDS = 500
@@ -26,8 +29,11 @@ cfg.TEST.NUM_DUAL_ITERATIONS = 100
 cfg.TEST.BATCH_SIZE = 1
 cfg.TEST.VAL_PERIOD = 1000000 # Validate after every n epoch (can be less than 1).
 
-cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'mm_diff']
-cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'mm_diff']
+cfg.MODEL.VAR_LP_FEATURES = ['deg', 'obj']
+cfg.MODEL.VAR_LP_FEATURES_INIT = ['deg', 'obj']
+
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'mm_diff', 'smooth_sol@1.0', 'smooth_sol@10.0', 'smooth_sol@100.0', 'smooth_sol@1000.0'] #, 'prev_sol_avg']
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff' , 'mm_diff', 'smooth_sol@1.0', 'smooth_sol@10.0', 'smooth_sol@100.0', 'smooth_sol@1000.0'] #, 'prev_sol_avg']
 
 cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_change_free_update']
 cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_change']

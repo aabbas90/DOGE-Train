@@ -10,10 +10,10 @@ cfg.TRAIN.NUM_DUAL_ITERATIONS = 20
 cfg.TRAIN.GRAD_DUAL_ITR_MAX_ITR = 20
 cfg.TRAIN.NUM_ROUNDS = 20
 cfg.TRAIN.FREE_UPDATE_LOSS_WEIGHT = 0.0
-cfg.TRAIN.MAX_NUM_EPOCHS = 200
-cfg.TRAIN.NUM_JOURNEYS = 2
+cfg.TRAIN.MAX_NUM_EPOCHS = 400
+cfg.TRAIN.NUM_JOURNEYS = 4
 cfg.TRAIN.BATCH_SIZE = 2
-cfg.TRAIN.NUM_ROUNDS = 30
+cfg.TRAIN.USE_REPLAY_BUFFER = True
 
 cfg.MODEL.PREDICT_OMEGA = True
 cfg.MODEL.PREDICT_DIST_WEIGHTS = True
@@ -25,10 +25,11 @@ cfg.TEST.NUM_DUAL_ITERATIONS = 200
 cfg.TEST.BATCH_SIZE = 1
 cfg.TEST.VAL_PERIOD = 10000
 
-cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
-cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb']
-cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff'] 
-cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff', 'prev_sol_avg', 'mm_diff']
+cfg.MODEL.EDGE_LP_FEATURES = ['sol', 'prev_sol', 'coeff', 'mm_diff', 'prev_sol_avg', 'smooth_sol@0.1', 'smooth_sol@1.0', 'smooth_sol@10.0', 'smooth_sol@100.0']
+cfg.MODEL.EDGE_LP_FEATURES_INIT = ['sol', 'prev_sol', 'coeff' , 'mm_diff', 'prev_sol_avg', 'smooth_sol@0.1', 'smooth_sol@1.0', 'smooth_sol@10.0', 'smooth_sol@100.0']
+
+cfg.MODEL.CON_LP_FEATURES = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg', 'lb_change_free_update']
+cfg.MODEL.CON_LP_FEATURES_INIT = ['lb', 'rhs', 'con_type', 'deg', 'prev_lb', 'lb_first_order_avg', 'lb_sec_order_avg', 'lb_change']
 
 cfg.DATA.NUM_WORKERS = 4
 cfg.DATA.DATASETS = ['GM_WORMS_TRAIN', 'GM_WORMS_VAL']

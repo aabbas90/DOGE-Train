@@ -137,12 +137,16 @@ def get_edge_mask_without_terminal_nodes(edge_index_var_con, var_degree):
 class FeatureExtractor(torch.nn.Module):
     def __init__(self, num_var_lp_f, out_var_dim, num_con_lp_f, out_con_dim, num_edge_lp_f, out_edge_dim, depth, 
                 use_layer_norm = False, use_def_mm = True, num_hidden_layers_edge = 0, use_net_solver_costs = False,
-                takes_learned_features = False, use_celu_activation = False, aggr = 'mean'):
+                use_solver_costs = True, takes_learned_features = False, use_celu_activation = False, aggr = 'mean'):
         super(FeatureExtractor, self).__init__()
         self.num_var_lp_f = num_var_lp_f
         self.num_con_lp_f = num_con_lp_f
-        num_edge_lp_f_with_ss = num_edge_lp_f + 2 - int(use_net_solver_costs) + int(use_def_mm) 
         self.use_def_mm = use_def_mm
+        if use_solver_costs:
+            num_edge_lp_f_with_ss = num_edge_lp_f + 2 - int(use_net_solver_costs) + int(use_def_mm) 
+        else:
+            num_edge_lp_f_with_ss = num_edge_lp_f
+            self.use_def_mm = False
         self.takes_learned_features = takes_learned_features
         if takes_learned_features:
             self.in_var_dim = out_var_dim
@@ -158,6 +162,7 @@ class FeatureExtractor(torch.nn.Module):
                                 num_con_lp_f, self.in_con_dim, out_con_dim,
                                 num_edge_lp_f_with_ss, self.in_edge_dim, out_edge_dim,
                                 use_layer_norm, use_def_mm, 
+                                use_solver_costs = use_solver_costs,
                                 num_hidden_layers_edge = num_hidden_layers_edge,
                                 use_net_solver_costs = use_net_solver_costs,
                                 use_celu_activation = use_celu_activation,
@@ -169,6 +174,7 @@ class FeatureExtractor(torch.nn.Module):
                                     num_con_lp_f, out_con_dim, out_con_dim,
                                     num_edge_lp_f_with_ss, out_edge_dim, out_edge_dim,
                                     use_layer_norm, use_def_mm,
+                                    use_solver_costs = use_solver_costs,
                                     num_hidden_layers_edge = num_hidden_layers_edge,
                                     use_net_solver_costs = use_net_solver_costs,
                                     use_celu_activation = use_celu_activation,
@@ -199,7 +205,8 @@ class DOGEPredictor(torch.nn.Module):
     def __init__(self, var_lp_f_names, con_lp_f_names, edge_lp_f_names, depth, var_dim, con_dim, edge_dim, history_num_itr = 20,
                 use_layer_norm = False, predict_dist_weights = False, predict_omega = False, num_hidden_layers_edge = 0, 
                 use_net_solver_costs = False, use_lstm_var = False, free_update = False, free_update_loss_weight = 0.0,
-                denormalize_free_update = False, scale_free_update = False, use_celu_activation = False, aggr = 'mean'):
+                denormalize_free_update = False, scale_free_update = False, use_celu_activation = False, aggr = 'mean',
+                use_solver_costs = True):
         super(DOGEPredictor, self).__init__()
         self.var_lp_f_names = var_lp_f_names
         self.con_lp_f_names = con_lp_f_names
@@ -212,7 +219,8 @@ class DOGEPredictor(torch.nn.Module):
         if self.use_gnn:
             self.feature_extractor = FeatureExtractor(self.num_var_lp_f, var_dim, self.num_con_lp_f, con_dim, len(edge_lp_f_names), edge_dim, 
                                                     depth, use_layer_norm, use_def_mm = True, num_hidden_layers_edge = num_hidden_layers_edge,
-                                                    use_net_solver_costs = use_net_solver_costs, use_celu_activation = use_celu_activation, aggr = aggr)
+                                                    use_net_solver_costs = use_net_solver_costs, use_celu_activation = use_celu_activation, aggr = aggr,
+                                                    use_solver_costs = use_solver_costs)
             
         self.history_num_itr = history_num_itr
         self.predict_dist_weights = predict_dist_weights
@@ -389,6 +397,6 @@ class DOGEPredictor(torch.nn.Module):
                 dist_weights_grad, omega_vec_grad = sol_utils.populate_grad_features_dual(solvers, solver_state, dist_weights, omega_vec, 20, batch_index_con)
                 edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('grad_dist_weights')] = dist_weights_grad
                 edge_lp_f_wo_ss[:, self.edge_lp_f_names.index('grad_omega')] = omega_vec_grad
-
+            edge_lp_f_wo_ss = sol_utils.populate_smooth_solution_features(solvers, self.edge_lp_f_names, solver_state, edge_lp_f_wo_ss, valid_edge_mask)
         con_lp_f[:, self.con_lp_f_names.index('lb')] = sol_utils.compute_per_bdd_lower_bound(solvers, solver_state)
         return solver_state, var_lp_f, con_lp_f, edge_lp_f_wo_ss, dist_weights, omega_vec, var_hidden_states_lstm, lb_after_dist_free_update

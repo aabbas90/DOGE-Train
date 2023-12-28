@@ -8,6 +8,8 @@ import numpy as np
 from model.model import FeatureExtractor, DOGEPredictor
 import model.solver_utils as sol_utils
 from metrics.dual_metrics import DualMetrics 
+from data.replay_buffer import ReplayBuffer
+from pytorch_lightning.utilities import grad_norm
 
 class DOGE(LightningModule):
     def __init__(self, 
@@ -54,7 +56,9 @@ class DOGE(LightningModule):
                 val_datanames: Optional[List[str]] = None,
                 test_datanames: Optional[List[str]] = None,
                 non_learned_updates_test = False,
-                only_test_non_learned = False
+                only_test_non_learned = False,
+                use_replay_buffer = False,
+                use_solver_costs_as_feature: Optional[bool] = True
                 ):
         super(DOGE, self).__init__()
         self.save_hyperparameters()
@@ -78,7 +82,8 @@ class DOGE(LightningModule):
                         denormalize_free_update = denormalize_free_update,
                         scale_free_update = scale_free_update,
                         use_celu_activation = use_celu_activation,
-                        aggr = mp_aggr)
+                        aggr = mp_aggr,
+                        use_solver_costs = use_solver_costs_as_feature)
         if use_separate_model_later_stage:
             self.dual_block_later = DOGEPredictor(
                                     var_lp_f_names = var_lp_features,
@@ -100,7 +105,8 @@ class DOGE(LightningModule):
                                     denormalize_free_update = denormalize_free_update,
                                     scale_free_update = scale_free_update,
                                     use_celu_activation = use_celu_activation,
-                                    aggr = mp_aggr)
+                                    aggr = mp_aggr,
+                                    use_solver_costs = use_solver_costs_as_feature)
 
         self.val_datanames = val_datanames
         self.test_datanames = test_datanames
@@ -123,6 +129,8 @@ class DOGE(LightningModule):
         for data_name in test_datanames:
             self.eval_metrics_test[data_name] = DualMetrics(num_test_rounds, num_dual_iter_test)
             self.eval_metrics_test_non_learned[data_name] = DualMetrics(num_test_rounds, num_dual_iter_test)
+        self.replay_buffer = {} if use_replay_buffer else None
+        self.num_rounds = 1
 
     @classmethod
     def from_config(cls, cfg, val_datanames, test_datanames, num_test_rounds, num_dual_iter_test, dual_improvement_slope_test, non_learned_updates_test, only_test_non_learned):
@@ -170,7 +178,9 @@ class DOGE(LightningModule):
             non_learned_updates_test = non_learned_updates_test,
             only_test_non_learned = only_test_non_learned,
             num_journeys = cfg.TRAIN.NUM_JOURNEYS,
-            use_separate_model_later_stage = cfg.MODEL.USE_SEPARATE_MODEL_LATER_STAGE)
+            use_separate_model_later_stage = cfg.MODEL.USE_SEPARATE_MODEL_LATER_STAGE,
+            use_replay_buffer = cfg.TRAIN.USE_REPLAY_BUFFER,
+            use_solver_costs_as_feature = cfg.MODEL.USE_SOLVER_COST_AS_FEATURE)
 
     def configure_optimizers(self):
         if self.hparams.optimizer_name == 'Adam':
@@ -183,42 +193,48 @@ class DOGE(LightningModule):
             raise ValueError(f'Optimizer {self.hparams.optimizer_name} not exposed.')
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
-        gt_type = None # 'lp_stats' TODOAA
+        gt_type = None
+        replay_buffer_start_round = 0
+        if self.hparams.use_replay_buffer:
+            # Samples much early in the trajectory for lstm (by taking square) since the cell state needs to be built to summarize history.
+            replay_buffer_start_round = max(self.num_rounds - (self.hparams.num_train_rounds_with_grad * self.hparams.num_train_rounds_with_grad), 0)
         batch, dist_weights = sol_utils.init_solver_and_get_states(batch, device, gt_type,
                     self.hparams.var_lp_features_init, self.hparams.con_lp_features_init, self.hparams.edge_lp_features_init, 
                     self.hparams.num_dual_iter_train * 2, 0.0, self.hparams.omega_initial, 
                     distribute_deltaa = False, num_grad_iterations_dual_features = 0, 
-                    compute_history_for_itrs = self.hparams.num_dual_iter_train)
+                    compute_history_for_itrs = self.hparams.num_dual_iter_train, replay_buffer = self.replay_buffer, 
+                    replay_buffer_start_round = replay_buffer_start_round, use_lstm_var = self.hparams.use_lstm_var,
+                    num_learned_var_f = self.hparams.num_learned_var_f)
         batch.dist_weights = dist_weights
         batch.objective_dev = batch.objective.to(device).to(torch.float64)
         batch.initial_lb_per_instance = scatter_sum(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb')], batch.batch_index_con)
-        if self.hparams.use_lstm_var:
-            batch.var_hidden_states_lstm = {'h': torch.zeros((batch.var_lp_f.shape[0], self.hparams.num_learned_var_f), device = device),
-                                            'c': torch.zeros((batch.var_lp_f.shape[0], self.hparams.num_learned_var_f), device = device)}
-        else:
-            batch.var_hidden_states_lstm = torch.empty((0, 0))
-
         if batch.gt_info['lp_stats']['obj'][0] is not None:
             batch.gt_obj_normalized = (batch.gt_info['lp_stats']['obj'] - batch.obj_offset) * batch.obj_multiplier
             batch.gt_obj_normalized = batch.gt_obj_normalized.to(device)
             for (b, fp) in enumerate(batch.file_path):
                 diff = batch.gt_obj_normalized[b] - batch.initial_lb_per_instance[b]
-                try:
-                    assert diff > 1e-6, f"lb difference for file: {fp} = {diff} < 1e-6."
-                except:
-                    breakpoint()
+                assert diff > 1e-6, f"lb difference for file: {fp} = {diff} < 1e-6."
         return batch
 
+    # Samples location in the optimization trajectory where solver will be trained. 
+    # 1. We start training the solver at 'easy' paths first i.e., just at the start of optimization.
+    # 2. Afterwards we start exposing the solver to difficult regions where proposed_start_step will be much larger than 0.
+    # 3. Then we restart and start sampling again at easy regions and increase difficulty again.
+    # 4. Step 3 is repeated 'num_journeys' times. 
     def compute_training_start_round(self):
         current_start_epoch = self.current_epoch - self.hparams.start_episodic_training_after_epoch
         max_training_epoch_mod = 1 + (self.trainer.max_epochs // self.hparams.num_journeys) # Divides num_journeys many journeys.
         fraction = float(current_start_epoch) / max_training_epoch_mod
-        if fraction < 0:
+        if self.current_epoch % max_training_epoch_mod == 0 and self.hparams.use_replay_buffer:
+            print(f'Clearing replay buffer at epoch: {self.current_epoch}')
+            self.replay_buffer = {}
+
+        if fraction < 0: # Step 1. 
             return max(0, self.hparams.num_train_rounds_with_grad - 1)
         fraction = fraction % 1
         if not self.hparams.use_separate_model_later_stage:
             fraction = fraction * fraction
-        mean_start_step = fraction * (self.hparams.num_train_rounds) # self.hparams.num_train_rounds // 5 was previously 3.
+        mean_start_step = fraction * (self.hparams.num_train_rounds)
         proposed_start_step = np.round(np.random.normal(mean_start_step, self.hparams.num_train_rounds // 5)).astype(np.int32).item(0)
         proposed_start_step = max(max(min(proposed_start_step, self.hparams.num_train_rounds - 1), 0), self.hparams.num_train_rounds_with_grad - 1)
         if proposed_start_step < 3 and np.random.rand(1) > 0.5: # DOGE and DOGE-M on worms was computed by this additional randomization.
@@ -272,13 +288,12 @@ class DOGE(LightningModule):
         metrics_calculator.reset()
         return max_lb_per_instance
 
-    def log_grad_norm(self, grad_norm_dict: Dict[str, float]) -> None:
-        gn = grad_norm_dict['grad_2.0_norm_total']
-        # if gn > 100:
-        #     print(f'Itr: {self.global_step}, grad norm: {gn}')
+    # Override LM hook
+    def on_before_optimizer_step(self, optimizer):
+        # inspect (unscaled) gradients here
+        grad_norm_dict = grad_norm(self, norm_type=2)
         self.logger.experiment.add_scalar('train/grad_norm', grad_norm_dict['grad_2.0_norm_total'], global_step = self.global_step)
-        self.logger.experiment.add_scalar('train/progress_percent.', 100 * self.current_epoch / self.trainer.max_epochs, global_step = self.global_step)
-
+        
     def log_dist_weights(self, dist_weights, data_name, edge_index_var_con, itr):
         var_indices = edge_index_var_con[0]
         dist_weights_mean = scatter_mean(dist_weights, var_indices)[var_indices]
@@ -373,7 +388,7 @@ class DOGE(LightningModule):
 
         return batch, dist_weights, omega_vec, best_solver_state, current_max_lb, lb_after_free_update
 
-    def dual_rounds(self, batch, num_rounds, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, is_training = False, instance_log_name = None, non_learned_updates = False, return_best_dual = False):
+    def dual_rounds(self, batch, starting_round, num_rounds, num_dual_iterations, improvement_slope, grad_dual_itr_max_itr, is_training = False, instance_log_name = None, non_learned_updates = False, return_best_dual = False):
         loss = 0
         logs = [{'r' : 0, 'lb_per_instance': scatter_sum(batch.con_lp_f[:, self.hparams.con_lp_features.index('lb')], batch.batch_index_con), 't': time.time()}]
         gt_obj_normalized = None
@@ -390,7 +405,7 @@ class DOGE(LightningModule):
         lb_after_free_update = None
         use_later_dual_block = False
         for r in range(num_rounds):
-            if is_training and self.hparams.use_separate_model_later_stage and r >= self.hparams.num_train_rounds // 2:
+            if is_training and self.hparams.use_separate_model_later_stage and r + starting_round >= self.hparams.num_train_rounds // 2:
                 use_later_dual_block = True
 
             if 'round_index' in self.hparams.con_lp_features:
@@ -425,7 +440,7 @@ class DOGE(LightningModule):
                 last_lb_change = current_non_grad_lb_per_instance - lb_prev_round
                 rel_improvement = last_lb_change / initial_lb_change
                 if (self.hparams.use_separate_model_later_stage and not use_later_dual_block and
-                    (rel_improvement < 1e-6 or r >= num_rounds // 2)):
+                    (rel_improvement < 1e-6 or r + starting_round >= num_rounds // 2)):
                     print(f'Switching to later dual stage at round: {r} / {num_rounds}.')
                     use_later_dual_block = True
                     continue
@@ -445,25 +460,49 @@ class DOGE(LightningModule):
         return loss, batch, logs, best_solver_state
 
     def training_step(self, batch, batch_idx):
-        loss, batch, logs, _ = self.dual_rounds(batch, self.num_rounds, self.hparams.num_dual_iter_train, self.hparams.dual_improvement_slope_train, self.hparams.grad_dual_itr_max_itr, is_training = True)
+        num_rounds_to_run = self.num_rounds
+        if self.hparams.use_replay_buffer:
+            # All trajectories within a batch are sampled at the same round, so taking 0-th index is ok.
+            num_rounds_to_run = max(self.num_rounds - batch.sampled_trajectory_locations[0], 1)
+        rounds_already_done = self.num_rounds - num_rounds_to_run
+        loss, batch, logs, _ = self.dual_rounds(batch, rounds_already_done, num_rounds_to_run, self.hparams.num_dual_iter_train, self.hparams.dual_improvement_slope_train, self.hparams.grad_dual_itr_max_itr, is_training = True)
         self.train_metrics.update(batch, logs)
+        if self.hparams.use_replay_buffer:
+            lo_costs_c = batch.solver_state['lo_costs'].detach().cpu()
+            hi_costs_c = batch.solver_state['hi_costs'].detach().cpu()
+            def_mm_c = batch.solver_state['def_mm'].detach().cpu()
+            if self.hparams.use_lstm_var:
+                lstm_h = batch.var_hidden_states_lstm['h'].detach().cpu()
+                lstm_c = batch.var_hidden_states_lstm['c'].detach().cpu()
+                batch_index_var_c = batch.batch_index_var.cpu()
+            batch_index_edge_c = batch.batch_index_edge.cpu()
+            for (b, inst_p) in enumerate(batch.file_path):
+                if not inst_p in self.replay_buffer:
+                    self.replay_buffer[inst_p] = ReplayBuffer()
+                mask = batch_index_edge_c == b
+                if not self.hparams.use_lstm_var:
+                    self.replay_buffer[inst_p].add(batch.sampled_trajectory_locations[b] + num_rounds_to_run, (lo_costs_c[mask], hi_costs_c[mask], def_mm_c[mask]))
+                else:
+                    mask_var = batch_index_var_c == b
+                    self.replay_buffer[inst_p].add(batch.sampled_trajectory_locations[b] + num_rounds_to_run, (lo_costs_c[mask], hi_costs_c[mask], def_mm_c[mask], lstm_h[mask_var], lstm_c[mask_var]))
         return loss
 
     def validation_step(self, batch, batch_idx, dataset_idx = 0):
         data_name = self.val_datanames[dataset_idx]
         if self.non_learned_updates_val:
-            loss, batch, logs, _ = self.dual_rounds(batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, is_training = False, non_learned_updates = True)
+            loss, batch, logs, _ = self.dual_rounds(batch, 0, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, is_training = False, non_learned_updates = True)
             # self.eval_metrics_val_non_learned[data_name].update(batch, logs) # creates too many files on disk
         else:
             instance_name = os.path.basename(batch.file_path[0])
             data_name = self.val_datanames[dataset_idx]
             instance_log_name = f'val_{data_name}_{self.global_step}/{instance_name}'
-            loss, batch, logs, _ = self.dual_rounds(batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, is_training = False, instance_log_name = instance_log_name)
+            loss, batch, logs, _ = self.dual_rounds(batch, 0, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, is_training = False, instance_log_name = instance_log_name)
             # self.eval_metrics_val[data_name].update(batch, logs) # creates too many files on disk
 
         return loss
 
     def test_step(self, batch, batch_idx, dataset_idx = 0):
+        self.replay_buffer = {}
         assert len(batch.file_path) == 1, 'batch size 1 required for testing.'
         print(f'Testing on {batch.file_path}')
         instance_name = os.path.basename(batch.file_path[0])
@@ -472,7 +511,7 @@ class DOGE(LightningModule):
         if self.non_learned_updates_test:
             orig_batch = batch.clone()
         if not self.only_test_non_learned:
-            loss, batch, logs, best_solver_state = self.dual_rounds(batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, 
+            loss, batch, logs, best_solver_state = self.dual_rounds(batch, 0, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, 
                                                 is_training = False, instance_log_name = instance_log_name, non_learned_updates = False, return_best_dual = True)
             instance_level_metrics = DualMetrics(self.hparams.num_test_rounds, self.hparams.num_dual_iter_test).to(batch.edge_index_var_con.device)
             instance_level_metrics.update(batch, logs)
@@ -481,7 +520,7 @@ class DOGE(LightningModule):
 
         if self.non_learned_updates_test:
             # Perform non-learned updates:
-            _, batch, logs, _ = self.dual_rounds(orig_batch, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, 
+            _, batch, logs, _ = self.dual_rounds(orig_batch, 0, self.hparams.num_test_rounds, self.hparams.num_dual_iter_test, self.hparams.dual_improvement_slope_test, 0, 
                                                 is_training = False, instance_log_name = None, non_learned_updates = True)
             instance_level_metrics = DualMetrics(self.hparams.num_test_rounds, self.hparams.num_dual_iter_test).to(batch.edge_index_var_con.device)
             instance_level_metrics.update(batch, logs)
