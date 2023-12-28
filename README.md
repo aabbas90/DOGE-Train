@@ -33,7 +33,7 @@ Note that for testing we automatically run Gurobi for comparison. This can be di
 - `configs/`: Contains configuration files for all datasets. 
 - `data/`: Contains code related to ILP reading, processing etc. 
 - `model/model.py`: Contains the neural network related code. 
-- `model/solver_utils.py`: Provides interface to the parallel deferred min-marginal averaging algorithm.   
+- `model/solver_utils.py`: Provides interface to the parallel deferred min-marginal averaging algorithm, computes features sent as input to the GNN, and contains other helper functions.
 - `external/`: Contains external dependencies. 
 
 ## Updates
