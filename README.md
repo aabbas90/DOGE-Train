@@ -1,6 +1,6 @@
 # DOGE-Train: Discrete optimization on GPU with end-to-end training
 A fast, scalable, data-driven approach for solving relaxations of 0-1 integer linear programs on GPU.
-![DOGE pipeline](./data/doge_pipeline.PNG)
+![DOGE pipeline](./figures/doge_pipeline.PNG)
 
 ## Requirements
 We use `Pytorch 2.0` and `CUDA 11.8`. `Gurobi` is used as one of the baselines and also for parsing ILPs. Consult `install.sh` for installing all requirements.
@@ -35,3 +35,9 @@ Note that for testing we automatically run Gurobi for comparison. This can be di
 - `model/model.py`: Contains the neural network related code. 
 - `model/solver_utils.py`: Provides interface to the parallel deferred min-marginal averaging algorithm.   
 - `external/`: Contains external dependencies. 
+
+## Updates
+1. Added gradient of smoothed dual objective with varying degrees of smoothing, as features to the GNN. This improves results significantly on difficult dataset of QAPLib. Result comparison is
+![DOGE pipeline](./figures/DOGEv2_qaplib.png)
+2. Added replay buffer to store past trajectories, instead of solving from scratch see `doge.py:219`. This helps the non-LSTM version (DOGE) to have faster training by up to 4x. For LSTM version using replay buffer makes results worse possibly because we need to store cell states as well however these
+stored cell states become out-of-date when the network is updated. Therefore we recommend not using replay buffer with LSTM variant. 
